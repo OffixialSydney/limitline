@@ -1,0 +1,41 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root { color-scheme: light; }
+
+@layer base {
+  html { -webkit-text-size-adjust: 100%; }
+  body { @apply bg-paper font-sans text-ink antialiased; font-feature-settings: "cv11", "ss01"; }
+  h1, h2, h3 { @apply font-sans tracking-tight text-ink; }
+  :focus-visible { @apply outline outline-2 outline-offset-2 outline-accent; }
+  ::selection { background: #245c4533; }
+  .num { @apply font-mono; font-variant-numeric: tabular-nums; }
+}
+
+@layer components {
+  .btn { @apply inline-flex min-h-[44px] items-center justify-center gap-2 rounded-control border px-4 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 md:min-h-[40px]; }
+  .btn-primary { @apply btn border-accent bg-accent text-white hover:bg-accent-hover; }
+  .btn-secondary { @apply btn border-line bg-surface text-ink hover:bg-sunken; }
+  .btn-danger { @apply btn border-critical bg-critical text-white hover:bg-[#9a3b3b]; }
+  .btn-ghost { @apply btn border-transparent bg-transparent text-ink hover:bg-sunken; }
+  .btn-sm { @apply min-h-[36px] px-3 text-[13px] md:min-h-[32px]; }
+  .input { @apply block min-h-[44px] w-full rounded-control border border-line bg-surface px-3 text-[15px] text-ink placeholder:text-muted/70 md:min-h-[40px] md:text-sm; }
+  textarea.input { @apply min-h-[88px] py-2; }
+  .input[aria-invalid="true"] { @apply border-critical; }
+  .label { @apply mb-1 block text-sm font-medium text-ink; }
+  .hint { @apply mt-1 text-xs text-muted; }
+  .field-error { @apply mt-1 text-xs font-medium text-critical; }
+  .panel { @apply rounded-panel border border-line bg-surface; }
+  .th { @apply whitespace-nowrap px-3 py-2 text-left text-xs font-medium text-muted; }
+  .td { @apply px-3 py-3 align-middle text-sm; }
+  .link { @apply font-medium text-accent underline-offset-2 hover:underline; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
+}
+
+dialog::backdrop { background: rgb(23 25 22 / 0.45); }
+dialog[open] { animation: dlg 160ms ease-out; }
+@keyframes dlg { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }

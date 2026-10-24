@@ -54,7 +54,10 @@ describe("money precision", () => {
 });
 
 describe("profit target progress", () => {
-  const target = { mode: "amount" as const, value: "1000" };
+  const target: import("../../src/lib/calculations/engine.ts").ProfitTargetConfig = {
+  mode: "amount",
+  value: "1000",
+};
   const run = (profit: string | null, t = target) =>
     computeProgress({ startingBalance: START, target: t, profitCents: profit === null ? null : c(profit) });
   it("40% for 10,400 on a 10,000 start with a 1,000 target", () => {

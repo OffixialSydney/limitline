@@ -1,5 +1,5 @@
 "use client";
-import { useState, useTransition, type ReactNode } from "react";
+import { useRef, useState, useTransition, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { useForm, type Resolver } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -17,13 +17,24 @@ function useSubmit<T>(action: (v: T) => Promise<ActionResult | ActionResult<unkn
   const router = useRouter();
   const [msg, setMsg] = useState<{ ok: boolean; message: string } | null>(null);
   const [pending, start] = useTransition();
-  const submit = (v: T) => start(async () => {
-    setMsg(null);
-    const r = await action(v);
-    if (r.ok) { onDone(); router.refresh(); return; }
-    if (r.fieldErrors) for (const [k, m] of Object.entries(r.fieldErrors)) setFieldError(k, m);
-    setMsg({ ok: false, message: r.message });
-  });
+  const busy = useRef(false);
+  const submit = (v: T) => {
+    if (busy.current) return;
+    busy.current = true;
+    start(async () => {
+      try {
+        setMsg(null);
+        const r = await action(v);
+        if (r.ok) { onDone(); router.refresh(); return; }
+        if (r.fieldErrors) for (const [k, m] of Object.entries(r.fieldErrors)) setFieldError(k, m);
+        setMsg({ ok: false, message: r.message });
+      } catch {
+        setMsg({ ok: false, message: "Unable to reach the server. Please check your connection and try again." });
+      } finally {
+        busy.current = false;
+      }
+    });
+  };
   return { msg, pending, submit };
 }
 
@@ -108,11 +119,11 @@ export function SnapshotForm({ options, defaults, onDone }: { options: Challenge
     <form onSubmit={handleSubmit(submit)} noValidate className="space-y-3">
       <ChallengeSelect id="s-challengeId" options={options} error={e("challengeId")} register={register("challengeId")} />
       <div className="grid grid-cols-2 gap-3">
-        <Field id="s-balance" label="Balance" error={e("balance")}><input className="input num" inputMode="decimal" {...p("balance")} /></Field>
+        <Field id="s-balance" label="Balance" error={e("balance")} hint="Closed-trade balance"><input className="input num" inputMode="decimal" {...p("balance")} /></Field>
         <Field id="s-equity" label="Equity" error={e("equity")} hint="Includes open positions"><input className="input num" inputMode="decimal" {...p("equity")} /></Field>
       </div>
       <Field id="s-observedAt" label="Observed at" error={e("observedAt")}><input type="datetime-local" className="input" {...p("observedAt")} /></Field>
-      <p className="text-xs text-muted">Saved as a manual observation. Limitline does not receive live broker data.</p>
+      <p className="text-xs text-muted">Enter both Balance and Equity whenever possible so balance-based and equity-based loss rules stay synchronized. Limitline does not receive live broker data.</p>
       <Field id="s-notes" label="Notes" error={e("notes")}><textarea className="input" rows={2} {...p("notes")} /></Field>
       <FormMessage state={msg} />
       <Actions pending={pending} onCancel={onDone} label="Record observation" />

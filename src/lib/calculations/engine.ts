@@ -65,6 +65,10 @@ export interface BalanceInfo {
   observedAt: Date | null;
   equityCents: Cents | null;
   equityObservedAt: Date | null;
+  balanceOutdated: boolean;
+  equityOutdated: boolean;
+  laterTradesCount: number;
+  laterEventsCount: number;
 }
 
 export function currentBalance(args: {
@@ -75,16 +79,63 @@ export function currentBalance(args: {
   const lastEq = [...obs].reverse().find((o) => o.equity !== null);
   const equityCents = lastEq?.equity ?? null;
   const equityObservedAt = lastEq?.observedAt ?? null;
+
+  const tradeTimes = args.trades
+    .map((t) => (t.exitTime ?? t.entryTime)?.getTime() ?? null)
+    .filter((t): t is number => t !== null);
+  const eventTimes = args.events.map((e) => e.occurredAt.getTime());
+
+  const equityOutdated = equityObservedAt !== null && (
+    tradeTimes.some((t) => t > equityObservedAt.getTime()) ||
+    eventTimes.some((t) => t > equityObservedAt.getTime()) ||
+    obs.some((o) => o.observedAt.getTime() > equityObservedAt.getTime() && o.equity === null)
+  );
+
   if (lastBal && lastBal.balance !== null) {
-    return { cents: lastBal.balance, source: "snapshot", observedAt: lastBal.observedAt, equityCents, equityObservedAt };
+    const balAt = lastBal.observedAt.getTime();
+    const laterTradesCount = tradeTimes.filter((t) => t > balAt).length;
+    const laterEventsCount = eventTimes.filter((t) => t > balAt).length;
+    const newerObsWithoutBalance = obs.some((o) => o.observedAt.getTime() > balAt && o.balance === null);
+    const balanceOutdated = laterTradesCount > 0 || laterEventsCount > 0 || newerObsWithoutBalance;
+    return {
+      cents: lastBal.balance,
+      source: "snapshot",
+      observedAt: lastBal.observedAt,
+      equityCents,
+      equityObservedAt,
+      balanceOutdated,
+      equityOutdated,
+      laterTradesCount,
+      laterEventsCount,
+    };
   }
   const tradePnl = args.trades.reduce((s, t) => s + (t.netPnl ?? 0), 0);
   const hasRecords = args.trades.some((t) => t.netPnl !== null) || args.events.length > 0;
   if (hasRecords) {
     const adj = args.events.reduce((s, e) => s + signedEventAmount(e), 0);
-    return { cents: args.startingBalance + tradePnl + adj, source: "derived", observedAt: null, equityCents, equityObservedAt };
+    return {
+      cents: args.startingBalance + tradePnl + adj,
+      source: "derived",
+      observedAt: null,
+      equityCents,
+      equityObservedAt,
+      balanceOutdated: false,
+      equityOutdated,
+      laterTradesCount: 0,
+      laterEventsCount: 0,
+    };
   }
-  return { cents: null, source: "none", observedAt: null, equityCents, equityObservedAt };
+  return {
+    cents: null,
+    source: "none",
+    observedAt: null,
+    equityCents,
+    equityObservedAt,
+    balanceOutdated: false,
+    equityOutdated,
+    laterTradesCount: 0,
+    laterEventsCount: 0,
+  };
 }
 
 /**
@@ -145,6 +196,8 @@ export type Completeness = "complete" | "partial" | "missing";
 
 export interface LossResult {
   rule: "daily" | "overall";
+  measure: "balance" | "equity";
+  referenceLabel: string;
   status: RuleStatus;
   reasons: string[];
   allowanceCents: Cents | null;
@@ -165,10 +218,18 @@ interface LossArgs {
   now: Date; staleAfterMs?: number; warnPercent?: number;
 }
 
-function blank(rule: "daily" | "overall", status: RuleStatus, reasons: string[], now: Date, explanation: string,
-  extra: Partial<LossResult> = {}): LossResult {
+function blank(
+  rule: "daily" | "overall",
+  measure: "balance" | "equity",
+  referenceLabel: string,
+  status: RuleStatus,
+  reasons: string[],
+  now: Date,
+  explanation: string,
+  extra: Partial<LossResult> = {},
+): LossResult {
   return {
-    rule, status, reasons, allowanceCents: null, thresholdCents: null, referenceCents: null,
+    rule, measure, referenceLabel, status, reasons, allowanceCents: null, thresholdCents: null, referenceCents: null,
     currentValueCents: null, usedCents: null, remainingCents: null, usedPercent: null,
     completeness: "missing", calculatedAt: now, observedAt: null, explanation, ...extra,
   };
@@ -185,35 +246,49 @@ function classify(a: {
   return used * 100 >= a.allowance * a.warnPercent ? "warning" : "normal";
 }
 
-/** Reasons that make a "healthy" reading untrustworthy. Only applied to normal/warning results. */
-function trustIssues(lastObs: Date, args: LossArgs, extra: string[] = []): string[] {
+const valueOf = (o: Observation, m: "balance" | "equity") => (m === "balance" ? o.balance : o.equity);
+
+/** Reasons that make a reading incomplete or outdated. */
+function trustIssues(lastObs: Date, measure: "balance" | "equity", args: LossArgs, extra: string[] = []): string[] {
   const issues = [...extra];
   const stale = args.staleAfterMs ?? DEFAULT_STALE_AFTER_MS;
   if (args.now.getTime() - lastObs.getTime() > stale) {
-    issues.push("The latest observation is older than the freshness window, so current conditions may differ.");
+    issues.push(`The latest ${measure} observation is older than the freshness window, so current conditions may differ. Record a new observation with current ${measure}.`);
   }
   if (args.activityTimes.some((t) => t.getTime() > lastObs.getTime() && t.getTime() <= args.now.getTime())) {
-    issues.push("Trades or balance events were recorded after the latest observation, so it may not reflect them.");
+    issues.push(`Trades or balance events were recorded after the latest ${measure} observation, so it may not reflect them. Record a new observation with current balance and equity.`);
+  }
+  if (args.observations.some((o) => o.observedAt.getTime() > lastObs.getTime() && o.observedAt.getTime() <= args.now.getTime() && valueOf(o, measure) === null)) {
+    issues.push(`A newer observation was recorded without a ${measure} value, so this calculation uses an older ${measure} reading. Record a new observation with both balance and equity.`);
   }
   return issues;
 }
 
-const valueOf = (o: Observation, m: "balance" | "equity") => (m === "balance" ? o.balance : o.equity);
-
 export function evaluateOverallLoss(cfg: OverallLossConfig, args: LossArgs): LossResult {
   const { now } = args;
   const warnPercent = args.warnPercent ?? DEFAULT_WARN_PERCENT;
+  const measure = cfg.measure;
+  const referenceLabel = cfg.model === "static"
+    ? "Starting balance"
+    : cfg.model === "trailing"
+    ? `Highest recorded ${measure}`
+    : cfg.model === "eod_trailing"
+    ? `Highest completed-day ${measure}`
+    : "Reference";
+
   if (cfg.model === "custom") {
-    return blank("overall", "unknown", ["This drawdown model is marked custom or unsupported. Limitline does not calculate it."], now,
+    return blank("overall", measure, referenceLabel, "unknown",
+      ["This drawdown model is marked custom or unsupported. Limitline does not calculate it."], now,
       "Custom drawdown models are not calculated, and no other model is substituted.");
   }
   const allowance = resolveAmount(cfg, args.startingBalance);
   if (allowance === null) {
-    return blank("overall", "data_incomplete", ["The overall loss limit value is missing or invalid."], now,
+    return blank("overall", measure, referenceLabel, "data_incomplete",
+      ["The overall loss limit value is missing or invalid. Edit the challenge rules to set a positive loss limit."], now,
       "A positive loss limit is required.");
   }
   if (cfg.model === "eod_trailing" && (!isValidTimeZone(cfg.resetTimezone) || !isValidResetTime(cfg.resetTime))) {
-    return blank("overall", "data_incomplete",
+    return blank("overall", measure, referenceLabel, "data_incomplete",
       ["End-of-day trailing needs a valid reset timezone and reset time to know where each day ends."], now,
       "The day boundary is unknown, so the end-of-day reference cannot be established.", { allowanceCents: allowance });
   }
@@ -221,8 +296,8 @@ export function evaluateOverallLoss(cfg: OverallLossConfig, args: LossArgs): Los
     .map((o) => ({ at: o.observedAt, v: valueOf(o, cfg.measure) }))
     .filter((o): o is { at: Date; v: Cents } => o.v !== null);
   if (obs.length === 0) {
-    return blank("overall", "data_incomplete",
-      [`No ${cfg.measure} observations are recorded, so the current position cannot be established.`], now,
+    return blank("overall", measure, referenceLabel, "data_incomplete",
+      [`No ${cfg.measure} observations are recorded, so the current position cannot be established. Record an observation with your current ${cfg.measure}.`], now,
       "At least one observation is required.", { allowanceCents: allowance });
   }
 
@@ -268,14 +343,14 @@ export function evaluateOverallLoss(cfg: OverallLossConfig, args: LossArgs): Los
 
   const remaining = last.v - finalThreshold;
   const breachedEarlier = breachedAt !== null && remaining > 0;
-  const issues = trustIssues(last.at, args);
+  const issues = trustIssues(last.at, measure, args);
   const status = classify({ remaining, allowance, warnPercent, breachedEarlier, downgrade: issues.length > 0 });
   const used = allowance - remaining;
   const modelText = cfg.model === "static" ? "Static: threshold = starting balance - limit."
     : cfg.model === "trailing" ? `Trailing: threshold = highest recorded ${cfg.measure} - limit${cfg.lockAtStartingBalance ? ", never above the starting balance" : ""}.`
     : `End-of-day trailing: threshold = highest end-of-day ${cfg.measure} from completed days - limit${cfg.lockAtStartingBalance ? ", never above the starting balance" : ""}.`;
   return {
-    rule: "overall", status,
+    rule: "overall", measure, referenceLabel, status,
     reasons: issues,
     allowanceCents: allowance, thresholdCents: finalThreshold, referenceCents: reference,
     currentValueCents: last.v, usedCents: Math.max(0, used), remainingCents: remaining,
@@ -288,12 +363,21 @@ export function evaluateOverallLoss(cfg: OverallLossConfig, args: LossArgs): Los
 export function evaluateDailyLoss(cfg: DailyLossConfig, args: LossArgs): LossResult {
   const { now } = args;
   const warnPercent = args.warnPercent ?? DEFAULT_WARN_PERCENT;
+  const measure: "balance" | "equity" = cfg.includesOpenPositions ? "equity" : "balance";
+  const referenceLabel = cfg.reference === "start_of_day_balance"
+    ? "Start-of-day balance"
+    : cfg.reference === "start_of_day_equity"
+    ? "Start-of-day equity"
+    : "Higher of start-of-day balance or equity";
+
   const allowance = resolveAmount(cfg, args.startingBalance);
   if (allowance === null) {
-    return blank("daily", "data_incomplete", ["The daily loss limit value is missing or invalid."], now, "A positive loss limit is required.");
+    return blank("daily", measure, referenceLabel, "data_incomplete",
+      ["The daily loss limit value is missing or invalid. Edit the challenge rules to set a positive loss limit."], now,
+      "A positive loss limit is required.");
   }
   if (!isValidTimeZone(cfg.resetTimezone) || !isValidResetTime(cfg.resetTime)) {
-    return blank("daily", "data_incomplete",
+    return blank("daily", measure, referenceLabel, "data_incomplete",
       ["The daily reset timezone or time is missing, so the start of the current day is unknown."], now,
       "A daily loss cannot be calculated without knowing when the day resets.", { allowanceCents: allowance });
   }
@@ -306,20 +390,19 @@ export function evaluateDailyLoss(cfg: DailyLossConfig, args: LossArgs): LossRes
   };
   const refObs = [...obs].reverse().find((o) => o.observedAt.getTime() <= resetAt.getTime() && refValue(o) !== null);
   if (!refObs) {
-    return blank("daily", "data_incomplete",
-      ["No observation exists at or before the last daily reset, so the day's starting reference is unknown."], now,
+    return blank("daily", measure, referenceLabel, "data_incomplete",
+      ["No observation exists at or before the last daily reset, so the day's starting reference is unknown. Record an observation at or before the daily reset."], now,
       "Needs an observation from before the reset to measure today's loss.", { allowanceCents: allowance });
   }
   const reference = refValue(refObs)!;
-  const measure = cfg.includesOpenPositions ? "equity" : "balance";
   const period = obs
     .filter((o) => o.observedAt.getTime() > resetAt.getTime())
     .map((o) => ({ at: o.observedAt, v: valueOf(o, measure) }))
     .filter((o): o is { at: Date; v: Cents } => o.v !== null);
   const threshold = reference - allowance;
   if (period.length === 0) {
-    return blank("daily", "data_incomplete",
-      [`No ${measure} observation has been recorded since the last daily reset.`], now,
+    return blank("daily", measure, referenceLabel, "data_incomplete",
+      [`No ${measure} observation has been recorded since the last daily reset. Record a new observation with your current ${measure}.`], now,
       "Today's loss is unknown until an observation after the reset is recorded.",
       { allowanceCents: allowance, thresholdCents: threshold, referenceCents: reference, completeness: "partial",
         observedAt: refObs.observedAt });
@@ -333,11 +416,11 @@ export function evaluateDailyLoss(cfg: DailyLossConfig, args: LossArgs): LossRes
   if (args.activityTimes.some((t) => t.getTime() > refObs.observedAt.getTime() && t.getTime() <= resetAt.getTime())) {
     extra.push("Trades or balance events were recorded between the reference observation and the daily reset, so the reference may be outdated.");
   }
-  const issues = trustIssues(last.at, args, extra);
+  const issues = trustIssues(last.at, measure, args, extra);
   const breachedEarlier = breachedAt !== null && remaining > 0;
   const status = classify({ remaining, allowance, warnPercent, breachedEarlier, downgrade: issues.length > 0 });
   return {
-    rule: "daily", status, reasons: issues, allowanceCents: allowance, thresholdCents: threshold,
+    rule: "daily", measure, referenceLabel, status, reasons: issues, allowanceCents: allowance, thresholdCents: threshold,
     referenceCents: reference, currentValueCents: last.v, usedCents: used, remainingCents: remaining,
     usedPercent: ratioPercent(used, allowance), completeness: issues.length ? "partial" : "complete",
     calculatedAt: now, observedAt: last.at,
@@ -423,13 +506,21 @@ export function evaluateChallenge(input: ChallengeInput): ChallengeEvaluation {
     if (!r) return;
     const period = r.observedAt ? r.observedAt.toISOString().slice(0, 10) : "none";
     if (r.status === "warning") attention.push({ kind: warnKind, severity: "warning", key: `${warnKind}:${period}`, message: `${label} allowance is approaching its configured limit (${r.usedPercent ?? "?"}% used on recorded data).` });
-    else if (r.status === "limit_reached") attention.push({ kind: limitKind, severity: "critical", key: `${limitKind}:${period}`, message: `The latest recorded observation is at or beyond the ${label.toLowerCase()} limit.` });
-    else if (r.status === "breach_recorded") attention.push({ kind: "breach_recorded", severity: "critical", key: `breach_recorded:${r.rule}:${r.observedAt?.toISOString() ?? ""}`, message: `An earlier recorded observation went through the ${label.toLowerCase()} limit.` });
+    else if (r.status === "limit_reached") attention.push({ kind: limitKind, severity: "critical", key: `${limitKind}:${period}`, message: `The latest recorded ${r.measure} observation is at or beyond the ${label.toLowerCase()} limit.` });
+    else if (r.status === "breach_recorded") attention.push({ kind: "breach_recorded", severity: "critical", key: `breach_recorded:${r.rule}:${r.observedAt?.toISOString() ?? ""}`, message: `An earlier recorded ${r.measure} observation went through the ${label.toLowerCase()} limit.` });
     else if (r.status === "data_incomplete") attention.push({ kind: "data_incomplete", severity: "warning", key: `data_incomplete:${r.rule}:${r.reasons[0] ?? ""}`, message: `${label}: ${r.reasons[0] ?? "data is incomplete."}` });
   };
   addLoss(daily, "Daily loss", "daily_warning", "daily_limit");
   addLoss(overall, "Overall loss", "overall_warning", "overall_limit");
   if (!input.rules.overallLoss) attention.push({ kind: "data_incomplete", severity: "warning", key: "data_incomplete:no_overall_rule", message: "No overall loss rule is configured, so loss status cannot be determined." });
+  if (balance.balanceOutdated && !attention.some((a) => a.kind === "data_incomplete")) {
+    attention.push({
+      kind: "data_incomplete",
+      severity: "warning",
+      key: `data_incomplete:balance_outdated:${balance.observedAt?.toISOString() ?? "none"}`,
+      message: "Trades or balance events were recorded after the latest balance observation. Record a new observation to update current balance and profit.",
+    });
+  }
   if (progress.available && (progress.state === "reached" || progress.state === "exceeded")) {
     attention.push({ kind: "target_reached", severity: "info", key: "target_reached", message: "The recorded profit has reached the configured target." });
   }

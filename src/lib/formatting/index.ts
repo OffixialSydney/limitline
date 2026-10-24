@@ -26,11 +26,35 @@ export function formatNumber(value: number | string | null | undefined, locale =
 
 const isPlainDate = (v: unknown): v is string => typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v);
 
-export function formatDateTime(value: Date | string | null | undefined, prefs: FormatPrefs): string {
+export function formatDateTimeInZone(value: Date | string | null | undefined, locale: string, timeZone: string): string {
   if (!value) return "-";
   const d = typeof value === "string" ? new Date(value) : value;
   if (Number.isNaN(d.getTime())) return "-";
-  return new Intl.DateTimeFormat(prefs.locale, { timeZone: prefs.timeZone, dateStyle: "medium", timeStyle: "short" }).format(d);
+  try {
+    return new Intl.DateTimeFormat(locale, {
+      timeZone,
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      timeZoneName: "short",
+    }).format(d);
+  } catch {
+    return new Intl.DateTimeFormat(locale, {
+      timeZone: "UTC",
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      timeZoneName: "short",
+    }).format(d);
+  }
+}
+
+export function formatDateTime(value: Date | string | null | undefined, prefs: FormatPrefs): string {
+  return formatDateTimeInZone(value, prefs.locale, prefs.timeZone);
 }
 
 export function formatDate(value: string | Date | null | undefined, prefs: FormatPrefs): string {

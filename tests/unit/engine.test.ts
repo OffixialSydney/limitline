@@ -364,3 +364,119 @@ describe("evaluateChallenge", () => {
     assert.ok(e.attention.some((a) => a.key === "data_incomplete:no_overall_rule"));
   });
 });
+
+describe("challenge page data consistency audit scenarios", () => {
+  it("reproduces the $10,000 balance / $1,000 equity / $9,500 daily ref / $8,500 (4,250%) used scenario with explicit metric labels", () => {
+    const observations: Observation[] = [
+      o("2026-10-21T20:00:00Z", "9500", "9500"),
+      o("2026-10-22T10:00:00Z", "10000", "1000"),
+    ];
+    const laterTrade: TradeRecord = {
+      entryTime: new Date("2026-10-22T11:00:00Z"),
+      exitTime: new Date("2026-10-22T11:30:00Z"),
+      netPnl: c("150"),
+    };
+    const laterWithdrawal: AccountEvent = {
+      occurredAt: new Date("2026-10-22T12:00:00Z"),
+      type: "withdrawal",
+      amount: c("200"),
+    };
+
+    const ev = evaluateChallenge({
+      startingBalance: c("10000"),
+      rules: {
+        profitTarget: { mode: "amount", value: "1000" },
+        dailyLoss: daily({
+          mode: "amount",
+          value: "200",
+          reference: "start_of_day_balance",
+          includesOpenPositions: true,
+        }),
+        overallLoss: overall({
+          mode: "amount",
+          value: "600",
+          model: "static",
+          measure: "balance",
+        }),
+        tradingDays: { required: 4 },
+      },
+      observations,
+      trades: [laterTrade],
+      events: [laterWithdrawal],
+      tradedDates: ["2026-10-22"],
+      deadline: null,
+      now: NOW,
+      todayLocal: "2026-10-22",
+    });
+
+    // Balance & equity remain distinct and flag post-snapshot activity
+    assert.equal(ev.balance.cents, c("10000"));
+    assert.equal(ev.balance.equityCents, c("1000"));
+    assert.equal(ev.balance.source, "snapshot");
+    assert.equal(ev.balance.balanceOutdated, true);
+    assert.equal(ev.balance.equityOutdated, true);
+    assert.equal(ev.balance.laterTradesCount, 1);
+    assert.equal(ev.balance.laterEventsCount, 1);
+
+    // Snapshot-based trading profit at 10:00Z is $10,000 - $10,000 = $0 (0% target progress)
+    assert.equal(ev.profitCents, 0);
+    assert.equal(ev.progress.available, true);
+    assert.equal(ev.progress.rawPercent, 0);
+    assert.equal(ev.progress.displayPercent, 0);
+    assert.equal(ev.progress.state, "in_progress");
+
+    // Daily loss uses equity ($1,000) against $9,500 reference and $200 allowance -> $8,500 used (4,250%)
+    assert.ok(ev.daily);
+    assert.equal(ev.daily.measure, "equity");
+    assert.equal(ev.daily.referenceCents, c("9500"));
+    assert.equal(ev.daily.allowanceCents, c("200"));
+    assert.equal(ev.daily.thresholdCents, c("9300"));
+    assert.equal(ev.daily.currentValueCents, c("1000"));
+    assert.equal(ev.daily.usedCents, c("8500"));
+    assert.equal(ev.daily.usedPercent, 4250);
+    assert.equal(ev.daily.completeness, "partial");
+    assert.equal(ev.daily.status, "limit_reached");
+
+    // Overall loss uses balance ($10,000) against $10,000 reference and $600 allowance -> downgraded to data_incomplete because of later trade/withdrawal
+    assert.ok(ev.overall);
+    assert.equal(ev.overall.measure, "balance");
+    assert.equal(ev.overall.referenceCents, c("10000"));
+    assert.equal(ev.overall.allowanceCents, c("600"));
+    assert.equal(ev.overall.thresholdCents, c("9400"));
+    assert.equal(ev.overall.currentValueCents, c("10000"));
+    assert.equal(ev.overall.usedCents, 0);
+    assert.equal(ev.overall.usedPercent, 0);
+    assert.equal(ev.overall.completeness, "partial");
+    assert.equal(ev.overall.status, "data_incomplete");
+  });
+
+  it("flags an older equity observation as partial/incomplete when a newer balance-only observation exists", () => {
+    const observations: Observation[] = [
+      o("2026-10-21T20:00:00Z", "10000", "10000"),
+      o("2026-10-22T10:00:00Z", "9900", "9900"),
+      o("2026-10-22T12:00:00Z", "10000", null), // newer balance-only observation
+    ];
+    const bal = currentBalance({ startingBalance: START, observations, trades: [], events: [] });
+    assert.equal(bal.cents, c("10000"));
+    assert.equal(bal.equityCents, c("9900"));
+    assert.equal(bal.balanceOutdated, false);
+    assert.equal(bal.equityOutdated, true);
+
+    const d = evaluateDailyLoss(daily({ includesOpenPositions: true }), args(observations));
+    assert.equal(d.measure, "equity");
+    assert.equal(d.status, "data_incomplete");
+    assert.equal(d.completeness, "partial");
+    assert.match(d.reasons.join(" "), /newer observation was recorded without a equity value/i);
+  });
+
+  it("handles zero-denominator and invalid allowance edge cases safely without NaN or Infinity", () => {
+    assert.equal(ratioPercent(c("100"), 0), null);
+    assert.equal(ratioPercent(0, 0), null);
+    const dZero = evaluateDailyLoss(daily({ value: "0" }), args([o("2026-10-21T20:00:00Z", "10000"), o("2026-10-22T12:00:00Z", "9900")]));
+    assert.equal(dZero.status, "data_incomplete");
+    assert.equal(dZero.usedPercent, null);
+    const oZero = evaluateOverallLoss(overall({ value: "0" }), args([o("2026-10-22T12:00:00Z", "9900")]));
+    assert.equal(oZero.status, "data_incomplete");
+    assert.equal(oZero.usedPercent, null);
+  });
+});

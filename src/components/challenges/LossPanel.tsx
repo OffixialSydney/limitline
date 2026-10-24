@@ -18,15 +18,18 @@ export function LossPanel({ title, result, currency, prefs, notConfigured }: { t
   const tone = result.status === "limit_reached" || result.status === "breach_recorded" ? "critical" : result.status === "warning" ? "warning" : "accent";
   const rows: [string, string][] = [
     ["Allowance", m(result.allowanceCents)],
-    ["Reference", m(result.referenceCents)],
+    [`Reference (${result.referenceLabel})`, m(result.referenceCents)],
     ["Threshold", m(result.thresholdCents)],
-    ["Latest recorded value", m(result.currentValueCents)],
+    [`Latest recorded ${result.measure}`, m(result.currentValueCents)],
     ["Used", result.usedCents === null ? "-" : `${m(result.usedCents)} (${formatPercent(result.usedPercent, prefs.locale)})`],
   ];
   return (
     <section className="panel p-5" aria-label={title}>
       <div className="flex items-start justify-between gap-3">
-        <h3 className="text-sm font-semibold">{title}</h3>
+        <div>
+          <h3 className="text-sm font-semibold">{title}</h3>
+          <p className="mt-0.5 text-xs text-muted">Evaluated on recorded {result.measure}</p>
+        </div>
         <StatusBadge status={result.status} />
       </div>
       <p className="num mt-3 text-2xl font-semibold">
@@ -34,19 +37,26 @@ export function LossPanel({ title, result, currency, prefs, notConfigured }: { t
       </p>
       <div className="mt-3"><ProgressBar value={result.usedPercent} label={`${title} used`} tone={tone} /></div>
       {result.reasons.length > 0 && (
-        <ul className="mt-3 space-y-1 rounded-control border border-warning/40 bg-warning/10 p-3 text-sm">
-          {result.reasons.map((r) => <li key={r}>{r}</li>)}
-        </ul>
+        <div className="mt-3 rounded-control border border-warning/40 bg-warning/10 p-3 text-sm" role="status">
+          <p className="font-medium text-ink">
+            {result.completeness === "missing"
+              ? "Calculation unavailable — missing required inputs"
+              : "Incomplete or outdated observation"}
+          </p>
+          <ul className="mt-1 space-y-1 text-muted">
+            {result.reasons.map((r) => <li key={r}>{r}</li>)}
+          </ul>
+        </div>
       )}
       <dl className="mt-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-sm">
         {rows.map(([k, v]) => (<div key={k} className="contents"><dt className="text-muted">{k}</dt><dd className="num text-right">{v}</dd></div>))}
-        <dt className="text-muted">Data completeness</dt><dd className="text-right">{COMPLETENESS[result.completeness]}</dd>
-        <dt className="text-muted">Last observation</dt><dd className="text-right">{result.observedAt ? formatDateTime(result.observedAt, prefs) : "None"}</dd>
+        <dt className="text-muted">Data completeness</dt><dd className={`text-right ${result.completeness !== "complete" ? "font-medium text-warning" : ""}`}>{COMPLETENESS[result.completeness]}</dd>
+        <dt className="text-muted">Last {result.measure} observation</dt><dd className="text-right">{result.observedAt ? formatDateTime(result.observedAt, prefs) : "None"}</dd>
         <dt className="text-muted">Calculated</dt><dd className="text-right">{formatDateTime(result.calculatedAt, prefs)}</dd>
       </dl>
       <details className="mt-3 text-sm">
         <summary className="cursor-pointer text-xs font-medium text-accent">How this is calculated</summary>
-        <p className="mt-2 text-muted">{result.explanation} This uses only values you recorded. It does not reflect anything that happened after the last observation.</p>
+        <p className="mt-2 text-muted">{result.explanation} This uses only values you recorded. It does not reflect anything that happened after the last {result.measure} observation.</p>
       </details>
     </section>
   );

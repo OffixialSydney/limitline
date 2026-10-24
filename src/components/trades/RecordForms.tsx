@@ -57,19 +57,20 @@ function ChallengeSelect({ id, options, error, register }: { id: string; options
   );
 }
 
-export function TradeForm({ options, defaults, onDone }: { options: ChallengeOption[]; defaults: TradeFormInput; onDone: () => void }) {
+export function TradeForm({ options, defaults, onDone, timeZone }: { options: ChallengeOption[]; defaults: TradeFormInput; onDone: () => void; timeZone?: string }) {
   const { register, handleSubmit, setError, formState: { errors } } = useForm<TradeFormInput>({ resolver: zodResolver(tradeFormSchema) as unknown as Resolver<TradeFormInput>, defaultValues: defaults });
   const { msg, pending, submit } = useSubmit<TradeFormInput>(saveTrade, onDone, (k, m) => setError(k as keyof TradeFormInput, { message: m }));
   const e = (k: keyof TradeFormInput) => errors[k]?.message as string | undefined;
   const p = (k: keyof TradeFormInput) => ({ id: `t-${k}`, "aria-invalid": !!errors[k], "aria-describedby": describedBy(`t-${k}`, e(k)), ...register(k) });
+  const tzHint = timeZone ? `Timezone: ${timeZone}` : undefined;
   return (
     <form onSubmit={handleSubmit(submit)} noValidate className="space-y-3">
       <ChallengeSelect id="t-challengeId" options={options} error={e("challengeId")} register={register("challengeId")} />
       <div className="grid grid-cols-2 gap-3">
         <Field id="t-instrument" label="Instrument" error={e("instrument")}><input className="input uppercase" autoComplete="off" placeholder="EURUSD" {...p("instrument")} /></Field>
         <Field id="t-direction" label="Direction" error={e("direction")}><select className="input" {...p("direction")}><option value="long">Long</option><option value="short">Short</option></select></Field>
-        <Field id="t-entryTime" label="Entry time" error={e("entryTime")}><input type="datetime-local" className="input" {...p("entryTime")} /></Field>
-        <Field id="t-exitTime" label="Exit time" error={e("exitTime")}><input type="datetime-local" className="input" {...p("exitTime")} /></Field>
+        <Field id="t-entryTime" label="Entry time" error={e("entryTime")} hint={tzHint}><input type="datetime-local" className="input" {...p("entryTime")} /></Field>
+        <Field id="t-exitTime" label="Exit time" error={e("exitTime")} hint={tzHint}><input type="datetime-local" className="input" {...p("exitTime")} /></Field>
         <Field id="t-entryPrice" label="Entry price" error={e("entryPrice")}><input className="input num" inputMode="decimal" {...p("entryPrice")} /></Field>
         <Field id="t-exitPrice" label="Exit price" error={e("exitPrice")}><input className="input num" inputMode="decimal" {...p("exitPrice")} /></Field>
         <Field id="t-stopLoss" label="Stop-loss" error={e("stopLoss")}><input className="input num" inputMode="decimal" {...p("stopLoss")} /></Field>
@@ -87,13 +88,14 @@ export function TradeForm({ options, defaults, onDone }: { options: ChallengeOpt
   );
 }
 
-export function EventForm({ options, defaults, onDone }: { options: ChallengeOption[]; defaults: BalanceEventInput; onDone: () => void }) {
+export function EventForm({ options, defaults, onDone, timeZone }: { options: ChallengeOption[]; defaults: BalanceEventInput; onDone: () => void; timeZone?: string }) {
   const { register, handleSubmit, setError, watch, formState: { errors } } = useForm<BalanceEventInput>({ resolver: zodResolver(balanceEventSchema) as unknown as Resolver<BalanceEventInput>, defaultValues: defaults });
   const { msg, pending, submit } = useSubmit<BalanceEventInput>(addBalanceEvent, onDone, (k, m) => setError(k as keyof BalanceEventInput, { message: m }));
   const e = (k: keyof BalanceEventInput) => errors[k]?.message as string | undefined;
   const p = (k: keyof BalanceEventInput) => ({ id: `e-${k}`, "aria-invalid": !!errors[k], "aria-describedby": describedBy(`e-${k}`, e(k)), ...register(k) });
   const cid = watch("challengeId");
   const cur = options.find((o) => o.id === cid)?.currency ?? defaults.currency;
+  const tzHint = timeZone ? `Interpreted in your profile timezone (${timeZone})` : undefined;
   return (
     <form onSubmit={handleSubmit((v) => submit({ ...v, currency: cur }))} noValidate className="space-y-3">
       <ChallengeSelect id="e-challengeId" options={options} error={e("challengeId")} register={register("challengeId")} />
@@ -101,7 +103,7 @@ export function EventForm({ options, defaults, onDone }: { options: ChallengeOpt
         <Field id="e-eventType" label="Type" error={e("eventType")}><select className="input" {...p("eventType")}><option value="deposit">Deposit</option><option value="withdrawal">Withdrawal</option><option value="fee">Fee</option><option value="credit">Credit</option><option value="adjustment">Other adjustment</option></select></Field>
         <Field id="e-amount" label={`Amount (${cur})`} error={e("amount")} hint="Positive. Only adjustments may be negative."><input className="input num" inputMode="decimal" {...p("amount")} /></Field>
       </div>
-      <Field id="e-occurredAt" label="Date and time" error={e("occurredAt")}><input type="datetime-local" className="input" {...p("occurredAt")} /></Field>
+      <Field id="e-occurredAt" label="Date and time" error={e("occurredAt")} hint={tzHint}><input type="datetime-local" className="input" {...p("occurredAt")} /></Field>
       <p className="text-xs text-muted">These events are kept apart from trading results, so a deposit is never counted as profit.</p>
       <Field id="e-notes" label="Notes" error={e("notes")}><textarea className="input" rows={2} {...p("notes")} /></Field>
       <FormMessage state={msg} />
@@ -110,11 +112,12 @@ export function EventForm({ options, defaults, onDone }: { options: ChallengeOpt
   );
 }
 
-export function SnapshotForm({ options, defaults, onDone }: { options: ChallengeOption[]; defaults: SnapshotInput; onDone: () => void }) {
+export function SnapshotForm({ options, defaults, onDone, timeZone }: { options: ChallengeOption[]; defaults: SnapshotInput; onDone: () => void; timeZone?: string }) {
   const { register, handleSubmit, setError, formState: { errors } } = useForm<SnapshotInput>({ resolver: zodResolver(snapshotSchema) as unknown as Resolver<SnapshotInput>, defaultValues: defaults });
   const { msg, pending, submit } = useSubmit<SnapshotInput>(addSnapshot, onDone, (k, m) => setError(k as keyof SnapshotInput, { message: m }));
   const e = (k: keyof SnapshotInput) => errors[k]?.message as string | undefined;
   const p = (k: keyof SnapshotInput) => ({ id: `s-${k}`, "aria-invalid": !!errors[k], "aria-describedby": describedBy(`s-${k}`, e(k)), ...register(k) });
+  const tzHint = timeZone ? `Interpreted in your profile timezone (${timeZone}). Change in Settings if needed.` : undefined;
   return (
     <form onSubmit={handleSubmit(submit)} noValidate className="space-y-3">
       <ChallengeSelect id="s-challengeId" options={options} error={e("challengeId")} register={register("challengeId")} />
@@ -122,7 +125,7 @@ export function SnapshotForm({ options, defaults, onDone }: { options: Challenge
         <Field id="s-balance" label="Balance" error={e("balance")} hint="Closed-trade balance"><input className="input num" inputMode="decimal" {...p("balance")} /></Field>
         <Field id="s-equity" label="Equity" error={e("equity")} hint="Includes open positions"><input className="input num" inputMode="decimal" {...p("equity")} /></Field>
       </div>
-      <Field id="s-observedAt" label="Observed at" error={e("observedAt")}><input type="datetime-local" className="input" {...p("observedAt")} /></Field>
+      <Field id="s-observedAt" label="Observed at" error={e("observedAt")} hint={tzHint}><input type="datetime-local" className="input" {...p("observedAt")} /></Field>
       <p className="text-xs text-muted">Enter both Balance and Equity whenever possible so balance-based and equity-based loss rules stay synchronized. Limitline does not receive live broker data.</p>
       <Field id="s-notes" label="Notes" error={e("notes")}><textarea className="input" rows={2} {...p("notes")} /></Field>
       <FormMessage state={msg} />
@@ -132,7 +135,7 @@ export function SnapshotForm({ options, defaults, onDone }: { options: Challenge
 }
 
 type Kind = "trade" | "event" | "snapshot";
-export function RecordButtons({ options, challengeId, nowLocal, size = "md" }: { options: ChallengeOption[]; challengeId?: string; nowLocal: string; size?: "sm" | "md" }) {
+export function RecordButtons({ options, challengeId, nowLocal, timeZone, size = "md" }: { options: ChallengeOption[]; challengeId?: string; nowLocal: string; timeZone?: string; size?: "sm" | "md" }) {
   const [open, setOpen] = useState<Kind | null>(null);
   const close = () => setOpen(null);
   const first = options.find((o) => o.id === challengeId) ?? options[0];
@@ -143,13 +146,13 @@ export function RecordButtons({ options, challengeId, nowLocal, size = "md" }: {
     <>
       {b("snapshot", Activity, "Record observation")}{b("trade", ArrowLeftRight, "Record trade")}{b("event", Landmark, "Balance event")}
       <Dialog open={open === "trade"} onClose={close} title="Record trade" wide>
-        <TradeForm options={options} onDone={close} defaults={{ challengeId: first.id, instrument: "", direction: "long", entryTime: nowLocal, exitTime: "", entryPrice: "", exitPrice: "", stopLoss: "", takeProfit: "", positionSize: "", grossPnl: "", costs: "", netPnl: "", notes: "" }} />
+        <TradeForm options={options} onDone={close} {...(timeZone ? { timeZone } : {})} defaults={{ challengeId: first.id, instrument: "", direction: "long", entryTime: nowLocal, exitTime: "", entryPrice: "", exitPrice: "", stopLoss: "", takeProfit: "", positionSize: "", grossPnl: "", costs: "", netPnl: "", notes: "" }} />
       </Dialog>
       <Dialog open={open === "event"} onClose={close} title="Record balance event" description="Deposits, withdrawals, fees, credits and other adjustments.">
-        <EventForm options={options} onDone={close} defaults={{ challengeId: first.id, eventType: "deposit", amount: "", currency: first.currency, occurredAt: nowLocal, notes: "" }} />
+        <EventForm options={options} onDone={close} {...(timeZone ? { timeZone } : {})} defaults={{ challengeId: first.id, eventType: "deposit", amount: "", currency: first.currency, occurredAt: nowLocal, notes: "" }} />
       </Dialog>
       <Dialog open={open === "snapshot"} onClose={close} title="Record observation" description="Your balance and equity at a point in time.">
-        <SnapshotForm options={options} onDone={close} defaults={{ challengeId: first.id, balance: "", equity: "", observedAt: nowLocal, notes: "" }} />
+        <SnapshotForm options={options} onDone={close} {...(timeZone ? { timeZone } : {})} defaults={{ challengeId: first.id, balance: "", equity: "", observedAt: nowLocal, notes: "" }} />
       </Dialog>
     </>
   );

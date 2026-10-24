@@ -41,6 +41,12 @@ export default async function ChallengePage({ params }: { params: Promise<{ id: 
   const start = parseMoney(c.starting_balance) ?? 0;
   const staleMs = profile.stale_after_hours * 3600000 || DEFAULT_STALE_AFTER_MS;
   const stale = ev.lastObservedAt ? now.getTime() - ev.lastObservedAt.getTime() > staleMs : true;
+  const outdated = ev.balance.balanceOutdated || ev.balance.equityOutdated;
+  const splitTimestamps =
+    ev.balance.observedAt !== null &&
+    ev.balance.equityObservedAt !== null &&
+    ev.balance.observedAt.getTime() !== ev.balance.equityObservedAt.getTime();
+  const warnBanner = stale || outdated || splitTimestamps;
   const today = localDate(now, prefs.timeZone);
   const tradedDates = bundle.days.filter((d) => d.status === "traded").map((d) => d.trading_date).sort().reverse();
   const labels = Object.fromEntries(tradedDates.map((d) => [d, formatDate(d, prefs)]));
@@ -52,6 +58,24 @@ export default async function ChallengePage({ params }: { params: Promise<{ id: 
       id: `n-${n.id}`, challenge_id: id, action: "breach_alert", entity_type: "notification", entity_id: n.id, created_at: n.created_at, details: { summary: n.title.replace(`${c.name}: `, "") },
     } as AuditRow)),
   ].sort((a, b) => b.created_at.localeCompare(a.created_at));
+
+  const balanceNote = ev.balance.source === "snapshot"
+    ? ev.balance.balanceOutdated
+      ? `Observation (${ev.balance.observedAt ? formatDateTime(ev.balance.observedAt, prefs) : "earlier"}) · Newer records not reflected`
+      : `Latest observation${ev.balance.observedAt ? ` (${formatDateTime(ev.balance.observedAt, prefs)})` : ""}`
+    : ev.balance.source === "derived"
+    ? "Derived: start + trades + balance events"
+    : "Record an observation";
+
+  const equityNote = ev.balance.equityObservedAt
+    ? ev.balance.equityOutdated
+      ? `Observation (${formatDateTime(ev.balance.equityObservedAt, prefs)}) · Newer records not reflected`
+      : `Observation (${formatDateTime(ev.balance.equityObservedAt, prefs)})`
+    : "Record an observation with equity";
+
+  const profitNote = ev.balance.source === "snapshot" && ev.balance.laterTradesCount > 0
+    ? `Snapshot basis · Excludes ${ev.balance.laterTradesCount} trade(s) recorded after the balance observation`
+    : "Excludes deposits and withdrawals";
 
   return (
     <>
@@ -65,27 +89,43 @@ export default async function ChallengePage({ params }: { params: Promise<{ id: 
           <ChallengeActions id={id} name={c.name} status={c.status} />
         </>} />
 
-      <p className={`mb-6 flex items-start gap-2 rounded-control border px-3 py-2 text-sm ${stale ? "border-warning/40 bg-warning/10" : "border-line bg-surface"}`} role={stale ? "status" : undefined}>
-        {stale && <TriangleAlert size={16} className="mt-0.5 shrink-0 text-warning" aria-hidden="true" />}
-        <span>
-          {ev.lastObservedAt
-            ? <>Last recorded update: <strong className="font-medium">{formatDateTime(ev.lastObservedAt, prefs)}</strong> ({formatRelative(ev.lastObservedAt)}).{stale ? " Current account conditions may differ." : ""}</>
-            : <>No observations recorded. Some calculations are unavailable because required account observations are missing.</>}
-          {" "}Values come from what you entered, not from a live feed.
-        </span>
-      </p>
+      <div className={`mb-6 flex items-start gap-2 rounded-control border px-3 py-2.5 text-sm ${warnBanner ? "border-warning/40 bg-warning/10" : "border-line bg-surface"}`} role={warnBanner ? "status" : undefined}>
+        {warnBanner && <TriangleAlert size={16} className="mt-0.5 shrink-0 text-warning" aria-hidden="true" />}
+        <div className="space-y-1">
+          <p>
+            {ev.lastObservedAt
+              ? <>Last recorded observation: <strong className="font-medium">{formatDateTime(ev.lastObservedAt, prefs)}</strong> ({formatRelative(ev.lastObservedAt)}).{stale ? " This observation is older than your freshness window, so current account conditions may differ." : ""}</>
+              : <>No observations recorded. Some calculations are unavailable because required account observations are missing.</>}
+            {" "}Values come from what you entered, not from a live feed.
+          </p>
+          {outdated && (
+            <p className="text-xs text-muted">
+              <strong className="font-medium text-ink">Outdated snapshot notice:</strong> Trades, balance events, or partial observations were recorded after your latest balance or equity reading. Because snapshot-based metrics do not guess post-observation changes, click <strong className="font-medium text-ink">Record observation</strong> and enter your current <strong className="font-medium text-ink">Balance</strong> and <strong className="font-medium text-ink">Equity</strong> to synchronize all calculations.
+            </p>
+          )}
+          {!outdated && splitTimestamps && (
+            <p className="text-xs text-muted">
+              <strong className="font-medium text-ink">Mismatched timestamps:</strong> Your latest recorded balance ({formatDateTime(ev.balance.observedAt!, prefs)}) and latest recorded equity ({formatDateTime(ev.balance.equityObservedAt!, prefs)}) come from different observations. Record a new observation with both values to align them.
+            </p>
+          )}
+        </div>
+      </div>
 
       <div className="space-y-6">
         <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-panel border border-line bg-line lg:grid-cols-3 xl:grid-cols-6" aria-label="Account overview">
           {[
-            ["Starting balance", m(start), null],
-            ["Current balance", ev.balance.cents === null ? "No data" : m(ev.balance.cents), ev.balance.source === "snapshot" ? "Latest observation" : ev.balance.source === "derived" ? "Derived: start + trades + balance events" : "Record an observation"],
-            ["Current equity", ev.balance.equityCents === null ? "Not recorded" : m(ev.balance.equityCents), ev.balance.equityObservedAt ? formatDateTime(ev.balance.equityObservedAt, prefs) : null],
-            ["Net recorded profit / loss", ev.profitCents === null ? "No data" : `${ev.profitCents > 0 ? "+" : ""}${m(ev.profitCents)}`, "Excludes deposits and withdrawals"],
-            ["Target", ev.progress.targetCents === null ? "No target" : m(ev.progress.targetCents), "Profit above the starting balance"],
-            ["Target progress", ev.progress.available ? formatPercent(ev.progress.rawPercent, prefs.locale) : "Not enough data", null],
-          ].map(([k, v, note]) => (
-            <div key={k} className="bg-surface px-4 py-3"><dt className="text-xs font-medium text-muted">{k}</dt><dd className="num mt-1 text-lg font-semibold">{v}</dd>{note && <p className="mt-0.5 text-xs text-muted">{note}</p>}</div>
+            ["Starting balance", m(start), null, false],
+            ["Current balance", ev.balance.cents === null ? "No data" : m(ev.balance.cents), balanceNote, ev.balance.balanceOutdated],
+            ["Current equity", ev.balance.equityCents === null ? "Not recorded" : m(ev.balance.equityCents), equityNote, ev.balance.equityOutdated],
+            ["Net recorded profit / loss", ev.profitCents === null ? "No data" : `${ev.profitCents > 0 ? "+" : ""}${m(ev.profitCents)}`, profitNote, ev.balance.source === "snapshot" && ev.balance.laterTradesCount > 0],
+            ["Target", ev.progress.targetCents === null ? "No target" : m(ev.progress.targetCents), "Profit above the starting balance", false],
+            ["Target progress", ev.progress.available ? formatPercent(ev.progress.rawPercent, prefs.locale) : "Not enough data", ev.balance.source === "snapshot" && ev.balance.laterTradesCount > 0 ? "Based on last balance observation" : null, ev.balance.source === "snapshot" && ev.balance.laterTradesCount > 0],
+          ].map(([k, v, note, warn]) => (
+            <div key={k as string} className="bg-surface px-4 py-3">
+              <dt className="text-xs font-medium text-muted">{k as string}</dt>
+              <dd className="num mt-1 text-lg font-semibold">{v as string}</dd>
+              {note && <p className={`mt-0.5 text-xs ${warn ? "font-medium text-warning" : "text-muted"}`}>{note as string}</p>}
+            </div>
           ))}
         </dl>
 
@@ -99,6 +139,11 @@ export default async function ChallengePage({ params }: { params: Promise<{ id: 
               : `${formatPercent(ev.progress.rawPercent, prefs.locale)} of the target recorded.`}
           </p>
           <p className="mt-1 text-xs text-muted">Formula: recorded trading profit ÷ target profit × 100. Deposits, withdrawals, fees and credits are excluded.{ev.progress.available ? ` (${m(ev.progress.profitCents)} ÷ ${m(ev.progress.targetCents)})` : ""}</p>
+          {ev.balance.source === "snapshot" && (ev.balance.laterTradesCount > 0 || ev.balance.laterEventsCount > 0) && (
+            <p className="mt-2 rounded-control border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-muted" role="status">
+              <strong className="font-medium text-ink">Incomplete post-snapshot activity:</strong> {ev.balance.laterTradesCount} trade(s) and {ev.balance.laterEventsCount} balance event(s) were recorded after your latest balance observation ({ev.balance.observedAt ? formatDateTime(ev.balance.observedAt, prefs) : "earlier"}). When balance snapshots exist, trading profit is calculated from the latest balance observation minus starting balance and prior balance events. Record a new balance observation dated after those records to include them.
+            </p>
+          )}
         </section>
 
         <div className="grid gap-6 lg:grid-cols-2">

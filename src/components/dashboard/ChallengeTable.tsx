@@ -1,13 +1,13 @@
 "use client";
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { ArrowDown, ArrowUp, Pencil, Plus, Search, ArchiveRestore, Archive } from "lucide-react";
+import { ArrowDown, ArrowUp, Pencil, Plus, Search, ArchiveRestore, Archive, Trash2, CircleCheck } from "lucide-react";
 import type { ChallengeView, LossView } from "@/lib/server/evaluate";
 import { StatusBadge, ChallengeStatusBadge } from "@/components/ui/StatusBadge";
 import { ProgressBar } from "@/components/ui/ProgressBar";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ConfirmButton } from "@/components/ui/ConfirmButton";
-import { archiveChallenge, restoreChallenge } from "@/features/challenges/actions";
+import { archiveChallenge, deleteChallenge, restoreChallenge } from "@/features/challenges/actions";
 import { formatDateTime, formatMoney, formatPercent, formatRelative } from "@/lib/formatting";
 import { PHASE_LABEL } from "@/lib/status";
 import { statusRank } from "@/lib/calculations/engine";
@@ -37,31 +37,91 @@ function ProgressCell({ v, locale }: { v: ChallengeView; locale: string }) {
   );
 }
 
-export function RowActions({ v }: { v: ChallengeView }) {
+export function RowActions({
+  v,
+  onDeleted,
+  onNotice,
+}: {
+  v: ChallengeView;
+  onDeleted?: (id: string, message: string) => void;
+  onNotice?: (message: string) => void;
+}) {
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex flex-wrap items-center gap-2">
       {v.status !== "archived" && <Link href={`/app/challenges/${v.id}/edit`} className="btn-secondary btn-sm"><Pencil size={14} aria-hidden="true" />Edit</Link>}
       {v.status === "archived" ? (
-        <ConfirmButton tone="primary" icon={<ArchiveRestore size={14} aria-hidden="true" />} label="Restore" title={`Restore ${v.name}?`} description="It will return to its previous status." confirmLabel="Restore" action={() => restoreChallenge(v.id)} />
+        <ConfirmButton
+          tone="primary"
+          icon={<ArchiveRestore size={14} aria-hidden="true" />}
+          label="Restore"
+          title={`Restore ${v.name}?`}
+          description="It will return to its previous status."
+          confirmLabel="Restore"
+          action={() => restoreChallenge(v.id)}
+          onSuccess={(msg) => onNotice?.(msg)}
+        />
       ) : (
-        <ConfirmButton icon={<Archive size={14} aria-hidden="true" />} label="Archive" title={`Archive ${v.name}?`} description="Archiving hides this challenge from the overview. Its trades, observations and history are kept, and you can restore it later." confirmLabel="Archive" action={() => archiveChallenge(v.id)} />
+        <ConfirmButton
+          icon={<Archive size={14} aria-hidden="true" />}
+          label="Archive"
+          title={`Archive ${v.name}?`}
+          description="Archiving hides this challenge from the overview. Its trades, observations and history are kept, and you can restore it later."
+          confirmLabel="Archive"
+          action={() => archiveChallenge(v.id)}
+          onSuccess={(msg) => onNotice?.(msg)}
+        />
       )}
+      <ConfirmButton
+        tone="danger"
+        className="btn-secondary btn-sm text-critical hover:border-critical/40 hover:bg-critical/5"
+        icon={<Trash2 size={14} aria-hidden="true" />}
+        label="Delete challenge"
+        title={`Delete ${v.name} permanently?`}
+        description={`This permanently deletes "${v.name}" and removes all of its associated rules, trades, observations (account snapshots), balance events, trading days, and notifications. Unlike archiving, this cannot be undone.`}
+        confirmLabel="Delete challenge permanently"
+        requireText="DELETE"
+        action={() => deleteChallenge(v.id)}
+        onSuccess={(msg) => onDeleted?.(v.id, msg)}
+      />
     </div>
   );
 }
 
-export function ChallengeTable({ rows, prefs, variant }: { rows: ChallengeView[]; prefs: { locale: string; timeZone: string }; variant: "overview" | "manage" }) {
+export function ChallengeTable({
+  rows,
+  prefs,
+  variant,
+  initialNotice = null,
+}: {
+  rows: ChallengeView[];
+  prefs: { locale: string; timeZone: string };
+  variant: "overview" | "manage";
+  initialNotice?: string | null;
+}) {
   const [q, setQ] = useState("");
   const [firm, setFirm] = useState("all");
   const [phase, setPhase] = useState("all");
   const [status, setStatus] = useState(variant === "overview" ? "all" : "open");
   const [sort, setSort] = useState<SortKey>("updated");
   const [desc, setDesc] = useState(true);
-  const firms = useMemo(() => [...new Set(rows.map((r) => r.firmName))].sort(), [rows]);
+  const [deletedIds, setDeletedIds] = useState<Set<string>>(() => new Set());
+  const [notice, setNotice] = useState<string | null>(initialNotice);
+
+  const activeRows = useMemo(() => rows.filter((r) => !deletedIds.has(r.id)), [rows, deletedIds]);
+  const firms = useMemo(() => [...new Set(activeRows.map((r) => r.firmName))].sort(), [activeRows]);
+
+  const handleDeleted = (id: string, message: string) => {
+    setDeletedIds((prev) => {
+      const next = new Set(prev);
+      next.add(id);
+      return next;
+    });
+    setNotice(message);
+  };
 
   const shown = useMemo(() => {
     const needle = q.trim().toLowerCase();
-    const list = rows.filter((r) =>
+    const list = activeRows.filter((r) =>
       (!needle || r.name.toLowerCase().includes(needle) || r.firmName.toLowerCase().includes(needle)) &&
       (firm === "all" || r.firmName === firm) && (phase === "all" || r.phase === phase) &&
       (status === "all" || (status === "open" ? r.status !== "archived" : r.status === status)));
@@ -76,13 +136,24 @@ export function ChallengeTable({ rows, prefs, variant }: { rows: ChallengeView[]
       }
     };
     return [...list].sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0) * dir);
-  }, [rows, q, firm, phase, status, sort, desc]);
+  }, [activeRows, q, firm, phase, status, sort, desc]);
 
   const manage = variant === "manage";
   const filtered = q || firm !== "all" || phase !== "all" || (status !== "all" && status !== (variant === "overview" ? "all" : "open"));
 
   return (
     <section aria-labelledby={`tbl-${variant}`} className="panel">
+      {notice && (
+        <div role="status" className="flex items-center justify-between gap-3 border-b border-accent/30 bg-accent-soft px-4 py-2.5 text-sm text-accent">
+          <span className="flex items-center gap-2 font-medium">
+            <CircleCheck size={16} className="shrink-0" aria-hidden="true" />
+            {notice}
+          </span>
+          <button type="button" className="text-xs font-medium underline hover:no-underline" onClick={() => setNotice(null)}>
+            Dismiss
+          </button>
+        </div>
+      )}
       <div className="flex flex-col gap-3 border-b border-line px-4 py-3">
         <div className="flex items-center justify-between gap-3">
           <h2 id={`tbl-${variant}`} className="text-sm font-semibold">{manage ? "All challenges" : "Accounts"}</h2>
@@ -109,11 +180,11 @@ export function ChallengeTable({ rows, prefs, variant }: { rows: ChallengeView[]
               {desc ? <ArrowDown size={16} aria-hidden="true" /> : <ArrowUp size={16} aria-hidden="true" />}
             </button></div>
         </div>
-        <p className="text-xs text-muted" role="status">{shown.length} of {rows.length} shown</p>
+        <p className="text-xs text-muted" role="status">{shown.length} of {activeRows.length} shown</p>
       </div>
 
       {shown.length === 0 ? (
-        rows.length === 0 ? (
+        activeRows.length === 0 ? (
           <EmptyState title="No challenges yet" action={<Link href="/app/challenges/new" className="btn-primary"><Plus size={16} aria-hidden="true" />New challenge</Link>}>
             Create your first challenge to begin tracking your configured rules.
           </EmptyState>
@@ -131,7 +202,7 @@ export function ChallengeTable({ rows, prefs, variant }: { rows: ChallengeView[]
                   <th scope="col" className="th">Account</th><th scope="col" className="th">Balance</th>
                   <th scope="col" className="th min-w-[130px]">Target progress</th><th scope="col" className="th">Daily loss</th>
                   <th scope="col" className="th">Overall loss</th><th scope="col" className="th">Status</th>
-                  <th scope="col" className="th">Updated</th>{manage && <th scope="col" className="th"><span className="sr-only">Actions</span></th>}
+                  <th scope="col" className="th">Updated</th><th scope="col" className="th"><span className="sr-only">Actions</span></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-line">
@@ -147,7 +218,7 @@ export function ChallengeTable({ rows, prefs, variant }: { rows: ChallengeView[]
                     <td className="td"><ChallengeStatusBadge status={v.status} /></td>
                     <td className="td whitespace-nowrap text-xs text-muted" title={v.lastObservedAt ? `Last observation ${formatDateTime(v.lastObservedAt, prefs)}` : "No observations recorded"}>
                       {v.lastObservedAt ? formatRelative(v.lastObservedAt) : "No observations"}</td>
-                    {manage && <td className="td"><RowActions v={v} /></td>}
+                    <td className="td"><RowActions v={v} onDeleted={handleDeleted} onNotice={setNotice} /></td>
                   </tr>
                 ))}
               </tbody>
@@ -171,7 +242,7 @@ export function ChallengeTable({ rows, prefs, variant }: { rows: ChallengeView[]
                   <div><p className="mb-1 text-xs font-medium text-muted">Daily loss</p><LossCell v={v.daily} currency={v.currency} locale={prefs.locale} /></div>
                   <div><p className="mb-1 text-xs font-medium text-muted">Overall loss</p><LossCell v={v.overall} currency={v.currency} locale={prefs.locale} /></div>
                 </div>
-                {manage && <RowActions v={v} />}
+                <RowActions v={v} onDeleted={handleDeleted} onNotice={setNotice} />
               </li>
             ))}
           </ul>

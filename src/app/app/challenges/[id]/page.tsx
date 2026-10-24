@@ -85,7 +85,7 @@ export default async function ChallengePage({ params }: { params: Promise<{ id: 
         description={<span className="flex flex-wrap items-center gap-2"><span>{c.firm_name} · {PHASE_LABEL[c.current_phase] ?? c.current_phase}</span><ChallengeStatusBadge status={c.status} /></span>}
         actions={<>
           {c.status !== "archived" && <Link href={`/app/challenges/${id}/edit`} className="btn-secondary"><Pencil size={15} aria-hidden="true" />Edit</Link>}
-          {c.status !== "archived" && <RecordButtons options={[{ id, name: c.name, currency: cur }]} challengeId={id} nowLocal={toLocalInputValue(now, prefs.timeZone)} />}
+          {c.status !== "archived" && <RecordButtons options={[{ id, name: c.name, currency: cur }]} challengeId={id} nowLocal={toLocalInputValue(now, prefs.timeZone)} timeZone={prefs.timeZone} />}
           <ChallengeActions id={id} name={c.name} status={c.status} />
         </>} />
 

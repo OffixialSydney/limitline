@@ -18,6 +18,7 @@ export async function logAudit(supabase: SupabaseClient, a: AuditInput) {
 export const AUDIT_TEXT: Record<string, string> = {
   challenge_created: "Challenge created",
   challenge_updated: "Challenge details updated",
+  challenge_deleted: "Challenge deleted",
   rules_changed: "Rules changed",
   status_changed: "Status changed",
   challenge_archived: "Challenge archived",

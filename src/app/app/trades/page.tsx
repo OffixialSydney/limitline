@@ -31,30 +31,43 @@ export default async function RecordsPage({ searchParams }: { searchParams: Prom
   const fromIso = isDate(sp.from) ? wallTimeToUtc(sp.from!, "00:00", prefs.timeZone).toISOString() : null;
   const toIso = isDate(sp.to) ? wallTimeToUtc(addDays(sp.to!, 1), "00:00", prefs.timeZone).toISOString() : null;
   const challengeId = sp.challenge && nameOf.has(sp.challenge) ? sp.challenge : null;
-  const range: [number, number] = [(page - 1) * PAGE_SIZE, page * PAGE_SIZE - 1];
-  const time = tab === "trades" ? "entry_time" : tab === "events" ? "occurred_at" : "observed_at";
+  const from = (page - 1) * PAGE_SIZE;
+  const to = page * PAGE_SIZE - 1;
 
-  let rows: unknown[] = [], count = 0, failed = false;
-  const apply = <T extends { eq: (c: string, v: string) => T; gte: (c: string, v: string) => T; lt: (c: string, v: string) => T }>(q: T): T => {
-    let r = q;
-    if (challengeId) r = r.eq("challenge_id", challengeId);
-    if (fromIso) r = r.gte(time, fromIso);
-    if (toIso) r = r.lt(time, toIso);
-    return r;
-  };
+  let rows: unknown[] = [];
+  let count = 0;
+  let failed = false;
+
   if (tab === "trades") {
-    let q = apply(supabase.from("trades").select("*", { count: "exact" }));
+    let q = supabase.from("trades").select("*", { count: "exact" });
+    if (challengeId) q = q.eq("challenge_id", challengeId);
+    if (fromIso) q = q.gte("entry_time", fromIso);
+    if (toIso) q = q.lt("entry_time", toIso);
     const needle = (sp.q ?? "").replace(/[%,()*]/g, "").trim();
     if (needle) q = q.ilike("instrument", `%${needle}%`);
     const sortCol = sp.sort === "net_pnl" ? "net_pnl" : sp.sort === "instrument" ? "instrument" : "entry_time";
-    const res = await q.order(sortCol, { ascending: asc }).order("id").range(...range);
-    failed = !!res.error; rows = res.data ?? []; count = res.count ?? 0;
+    const res = await q.order(sortCol, { ascending: asc }).order("id").range(from, to);
+    failed = !!res.error;
+    rows = res.data ?? [];
+    count = res.count ?? 0;
   } else if (tab === "events") {
-    const res = await apply(supabase.from("balance_events").select("*", { count: "exact" })).order("occurred_at", { ascending: asc }).order("id").range(...range);
-    failed = !!res.error; rows = res.data ?? []; count = res.count ?? 0;
+    let q = supabase.from("balance_events").select("*", { count: "exact" });
+    if (challengeId) q = q.eq("challenge_id", challengeId);
+    if (fromIso) q = q.gte("occurred_at", fromIso);
+    if (toIso) q = q.lt("occurred_at", toIso);
+    const res = await q.order("occurred_at", { ascending: asc }).order("id").range(from, to);
+    failed = !!res.error;
+    rows = res.data ?? [];
+    count = res.count ?? 0;
   } else {
-    const res = await apply(supabase.from("account_snapshots").select("*", { count: "exact" })).order("observed_at", { ascending: asc }).order("id").range(...range);
-    failed = !!res.error; rows = res.data ?? []; count = res.count ?? 0;
+    let q = supabase.from("account_snapshots").select("*", { count: "exact" });
+    if (challengeId) q = q.eq("challenge_id", challengeId);
+    if (fromIso) q = q.gte("observed_at", fromIso);
+    if (toIso) q = q.lt("observed_at", toIso);
+    const res = await q.order("observed_at", { ascending: asc }).order("id").range(from, to);
+    failed = !!res.error;
+    rows = res.data ?? [];
+    count = res.count ?? 0;
   }
   const pages = Math.max(1, Math.ceil(count / PAGE_SIZE));
   const qs = (over: Partial<SP>) => { const p = new URLSearchParams(); for (const [k, v] of Object.entries({ ...sp, ...over })) if (v) p.set(k, String(v)); return `/app/trades?${p.toString()}`; };

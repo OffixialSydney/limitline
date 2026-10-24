@@ -280,3 +280,62 @@ export async function setChallengeStatus(id: string, status: string): Promise<Ac
   revalidatePath("/app", "layout");
   return { ok: true, message: "Challenge updated." };
 }
+
+/**
+ * Permanently deletes a challenge owned by the authenticated user.
+ * PostgreSQL executes the DELETE and all foreign-key cascades (challenge_rules, trades,
+ * balance_events, account_snapshots, trading_days, notifications, and audit_logs SET NULL)
+ * atomically inside a single transaction, preventing partial deletion or orphaned records.
+ */
+export async function deleteChallenge(id: string): Promise<ActionResult> {
+  try {
+    const session = await getActionSession();
+    if (!session) return { ok: false, message: NO_SESSION };
+    if (!uuid.safeParse(id).success) {
+      return { ok: false, message: "This challenge could not be found. Nothing was deleted." };
+    }
+    const { supabase, user } = session;
+    const { data: c } = await supabase
+      .from("challenges")
+      .select("id, name, firm_name")
+      .eq("id", id)
+      .eq("user_id", user.id)
+      .maybeSingle<Pick<ChallengeRow, "id" | "name" | "firm_name">>();
+    if (!c) {
+      return { ok: false, message: "This challenge could not be found. Nothing was deleted." };
+    }
+    const { data: removed, error } = await supabase
+      .from("challenges")
+      .delete()
+      .eq("id", id)
+      .eq("user_id", user.id)
+      .select("id")
+      .maybeSingle<{ id: string }>();
+    if (error || !removed) {
+      return {
+        ok: false,
+        message: "The challenge could not be deleted. Your challenge and its records were not removed.",
+      };
+    }
+    await logAudit(supabase, {
+      userId: user.id,
+      challengeId: null,
+      action: "challenge_deleted",
+      entityType: "challenge",
+      entityId: id,
+      details: { summary: `${c.name} (${c.firm_name})` },
+    });
+    revalidatePath("/app", "layout");
+    revalidatePath("/app/challenges");
+    revalidatePath("/app/overview");
+    return { ok: true, message: `Deleted "${c.name}" and all of its associated records.` };
+  } catch (err) {
+    if (process.env.NODE_ENV !== "production") {
+      console.error("[deleteChallenge] Unexpected error:", err);
+    }
+    return {
+      ok: false,
+      message: "The challenge could not be deleted. Your challenge and its records were not removed.",
+    };
+  }
+}

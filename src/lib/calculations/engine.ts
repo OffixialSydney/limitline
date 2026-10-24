@@ -210,6 +210,8 @@ export interface LossResult {
   completeness: Completeness;
   calculatedAt: Date;
   observedAt: Date | null;
+  resetAt: Date | null;
+  resetTimezone: string | null;
   explanation: string;
 }
 
@@ -231,7 +233,7 @@ function blank(
   return {
     rule, measure, referenceLabel, status, reasons, allowanceCents: null, thresholdCents: null, referenceCents: null,
     currentValueCents: null, usedCents: null, remainingCents: null, usedPercent: null,
-    completeness: "missing", calculatedAt: now, observedAt: null, explanation, ...extra,
+    completeness: "missing", calculatedAt: now, observedAt: null, resetAt: null, resetTimezone: null, explanation, ...extra,
   };
 }
 
@@ -310,6 +312,7 @@ export function evaluateOverallLoss(cfg: OverallLossConfig, args: LossArgs): Los
   let breachedAt: Date | null = null;
   let finalThreshold: Cents;
   let reference: Cents;
+  let eodResetAt: Date | null = null;
 
   if (cfg.model === "static") {
     finalThreshold = start - allowance;
@@ -325,6 +328,7 @@ export function evaluateOverallLoss(cfg: OverallLossConfig, args: LossArgs): Los
     finalThreshold = thresholdFor(peak);
   } else {
     const tz = cfg.resetTimezone!, rt = cfg.resetTime!;
+    eodResetAt = latestResetInstant(now, tz, rt);
     const days = new Map<string, { at: Date; v: Cents }[]>();
     for (const o of obs) {
       const k = periodKey(o.at, tz, rt);
@@ -356,6 +360,7 @@ export function evaluateOverallLoss(cfg: OverallLossConfig, args: LossArgs): Los
     currentValueCents: last.v, usedCents: Math.max(0, used), remainingCents: remaining,
     usedPercent: ratioPercent(Math.max(0, used), allowance),
     completeness: issues.length ? "partial" : "complete", calculatedAt: now, observedAt: last.at,
+    resetAt: eodResetAt, resetTimezone: cfg.resetTimezone,
     explanation: `${modelText} Remaining = latest ${cfg.measure} - threshold, from recorded observations only.`,
   };
 }
@@ -392,7 +397,8 @@ export function evaluateDailyLoss(cfg: DailyLossConfig, args: LossArgs): LossRes
   if (!refObs) {
     return blank("daily", measure, referenceLabel, "data_incomplete",
       ["No observation exists at or before the last daily reset, so the day's starting reference is unknown. Record an observation at or before the daily reset."], now,
-      "Needs an observation from before the reset to measure today's loss.", { allowanceCents: allowance });
+      "Needs an observation from before the reset to measure today's loss.",
+      { allowanceCents: allowance, resetAt, resetTimezone: cfg.resetTimezone });
   }
   const reference = refValue(refObs)!;
   const period = obs
@@ -402,10 +408,20 @@ export function evaluateDailyLoss(cfg: DailyLossConfig, args: LossArgs): LossRes
   const threshold = reference - allowance;
   if (period.length === 0) {
     return blank("daily", measure, referenceLabel, "data_incomplete",
-      [`No ${measure} observation has been recorded since the last daily reset. Record a new observation with your current ${measure}.`], now,
+      [
+        `No ${measure} observation has been recorded since the last daily reset (${cfg.resetTime} ${cfg.resetTimezone}). Your latest observation was recorded before that reset and is used as today's starting reference. Record a new observation with your current ${measure} to calculate today's loss.`,
+      ],
+      now,
       "Today's loss is unknown until an observation after the reset is recorded.",
-      { allowanceCents: allowance, thresholdCents: threshold, referenceCents: reference, completeness: "partial",
-        observedAt: refObs.observedAt });
+      {
+        allowanceCents: allowance,
+        thresholdCents: threshold,
+        referenceCents: reference,
+        completeness: "partial",
+        observedAt: refObs.observedAt,
+        resetAt,
+        resetTimezone: cfg.resetTimezone,
+      });
   }
   const last = period[period.length - 1]!;
   const breachedAt = period.find((o) => o.v <= threshold)?.at ?? null;
@@ -423,7 +439,7 @@ export function evaluateDailyLoss(cfg: DailyLossConfig, args: LossArgs): LossRes
     rule: "daily", measure, referenceLabel, status, reasons: issues, allowanceCents: allowance, thresholdCents: threshold,
     referenceCents: reference, currentValueCents: last.v, usedCents: used, remainingCents: remaining,
     usedPercent: ratioPercent(used, allowance), completeness: issues.length ? "partial" : "complete",
-    calculatedAt: now, observedAt: last.at,
+    calculatedAt: now, observedAt: last.at, resetAt, resetTimezone: cfg.resetTimezone,
     explanation: `Reference = ${cfg.reference.replaceAll("_", " ")} at the last reset (${resetAt.toISOString()}). Loss = reference - latest ${measure} since the reset. Remaining = limit - loss.`,
   };
 }

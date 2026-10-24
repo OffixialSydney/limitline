@@ -480,3 +480,104 @@ describe("challenge page data consistency audit scenarios", () => {
     assert.equal(oZero.usedPercent, null);
   });
 });
+
+describe("daily loss reset timezone and overall loss profit buffer audit", () => {
+  const LAGOS = "Africa/Lagos";
+  // Evaluation time: Oct 24, 2026 at 01:40 AM Africa/Lagos (00:40:00Z)
+  const NOW_LAGOS = new Date("2026-10-24T00:40:00.000Z");
+
+  it("correctly identifies an observation at 12:28 AM UTC (01:28 AM Africa/Lagos) as BEFORE the 01:34 Africa/Lagos reset (00:34 UTC)", () => {
+    const reset = latestResetInstant(NOW_LAGOS, LAGOS, "01:34");
+    assert.equal(reset.toISOString(), "2026-10-24T00:34:00.000Z");
+
+    // Observation recorded at Oct 24, 2026 12:28 AM UTC (01:28 AM Africa/Lagos) with $10,050 balance & equity
+    const obsPreReset = o("2026-10-24T00:28:00.000Z", "10050", "10050");
+    const dl = evaluateDailyLoss(
+      daily({
+        mode: "amount",
+        value: "200",
+        reference: "start_of_day_balance",
+        includesOpenPositions: false,
+        resetTimezone: LAGOS,
+        resetTime: "01:34",
+      }),
+      {
+        startingBalance: c("10000"),
+        observations: [obsPreReset],
+        activityTimes: [],
+        now: NOW_LAGOS,
+      },
+    );
+
+    // Pre-reset observation becomes the start-of-day reference ($10,050), and current period has no observations yet
+    assert.equal(dl.status, "data_incomplete");
+    assert.equal(dl.completeness, "partial");
+    assert.equal(dl.referenceCents, c("10050"));
+    assert.equal(dl.allowanceCents, c("200"));
+    assert.equal(dl.thresholdCents, c("9850"));
+    assert.equal(dl.currentValueCents, null);
+    assert.equal(dl.remainingCents, null);
+    assert.equal(dl.resetAt?.toISOString(), "2026-10-24T00:34:00.000Z");
+    assert.equal(dl.resetTimezone, LAGOS);
+    assert.match(dl.reasons.join(" "), /No balance observation has been recorded since the last daily reset/i);
+  });
+
+  it("completes the daily loss calculation once an observation is recorded after 01:34 Africa/Lagos", () => {
+    const obsPreReset = o("2026-10-24T00:28:00.000Z", "10050", "10050");
+    const obsPostReset = o("2026-10-24T00:38:00.000Z", "10020", "10020"); // 01:38 AM Africa/Lagos
+    const dl = evaluateDailyLoss(
+      daily({
+        mode: "amount",
+        value: "200",
+        reference: "start_of_day_balance",
+        includesOpenPositions: false,
+        resetTimezone: LAGOS,
+        resetTime: "01:34",
+      }),
+      {
+        startingBalance: c("10000"),
+        observations: [obsPreReset, obsPostReset],
+        activityTimes: [],
+        now: NOW_LAGOS,
+      },
+    );
+
+    assert.equal(dl.status, "normal");
+    assert.equal(dl.completeness, "complete");
+    assert.equal(dl.referenceCents, c("10050"));
+    assert.equal(dl.thresholdCents, c("9850"));
+    assert.equal(dl.currentValueCents, c("10020"));
+    assert.equal(dl.usedCents, c("30"));
+    assert.equal(dl.remainingCents, c("170"));
+    assert.equal(dl.usedPercent, 15);
+  });
+
+  it("reports $650 remaining on a static $600 overall loss allowance when current value is $10,050 (+$50 profit buffer above $10,000 start)", () => {
+    const obs = o("2026-10-24T00:28:00.000Z", "10050", "10050");
+    const ol = evaluateOverallLoss(
+      overall({
+        mode: "amount",
+        value: "600",
+        model: "static",
+        measure: "equity",
+      }),
+      {
+        startingBalance: c("10000"),
+        observations: [obs],
+        activityTimes: [],
+        now: NOW_LAGOS,
+      },
+    );
+
+    assert.equal(ol.status, "normal");
+    assert.equal(ol.completeness, "complete");
+    assert.equal(ol.referenceCents, c("10000"));
+    assert.equal(ol.allowanceCents, c("600"));
+    assert.equal(ol.thresholdCents, c("9400"));
+    assert.equal(ol.currentValueCents, c("10050"));
+    // Remaining = $10,050 (latest value) - $9,400 (static floor) = $650 ($600 allowance + $50 profit buffer)
+    assert.equal(ol.remainingCents, c("650"));
+    assert.equal(ol.usedCents, 0);
+    assert.equal(ol.usedPercent, 0);
+  });
+});

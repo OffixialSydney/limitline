@@ -1,5 +1,5 @@
 "use client";
-import { useRef, useState, useTransition, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { useForm, type Resolver } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -8,7 +8,15 @@ import { Dialog } from "@/components/ui/Dialog";
 import { Field, describedBy } from "@/components/ui/Field";
 import { FormMessage } from "@/components/ui/FormMessage";
 import { addBalanceEvent, addSnapshot, saveTrade } from "@/features/trading/actions";
-import { balanceEventSchema, snapshotSchema, tradeFormSchema, type BalanceEventInput, type SnapshotInput, type TradeFormInput } from "@/lib/validation/records";
+import {
+  balanceEventSchema,
+  normalizeTradeFormDefaults,
+  snapshotSchema,
+  tradeFormSchema,
+  type BalanceEventInput,
+  type SnapshotInput,
+  type TradeFormInput,
+} from "@/lib/validation/records";
 import type { ActionResult } from "@/lib/validation/common";
 
 export interface ChallengeOption { id: string; name: string; currency: string }
@@ -47,10 +55,29 @@ function Actions({ pending, onCancel, label }: { pending: boolean; onCancel: () 
   );
 }
 
-function ChallengeSelect({ id, options, error, register }: { id: string; options: ChallengeOption[]; error?: string | undefined; register: object }) {
+function ChallengeSelect({
+  id,
+  options,
+  defaultValue,
+  error,
+  register,
+}: {
+  id: string;
+  options: ChallengeOption[];
+  defaultValue?: string | undefined;
+  error?: string | undefined;
+  register: object;
+}) {
   return (
     <Field id={id} label="Challenge account" error={error}>
-      <select id={id} className="input" aria-invalid={!!error} aria-describedby={describedBy(id, error)} {...register}>
+      <select
+        id={id}
+        className="input"
+        defaultValue={defaultValue}
+        aria-invalid={!!error}
+        aria-describedby={describedBy(id, error)}
+        {...register}
+      >
         {options.map((o) => <option key={o.id} value={o.id}>{o.name} ({o.currency})</option>)}
       </select>
     </Field>
@@ -58,32 +85,91 @@ function ChallengeSelect({ id, options, error, register }: { id: string; options
 }
 
 export function TradeForm({ options, defaults, onDone, timeZone }: { options: ChallengeOption[]; defaults: TradeFormInput; onDone: () => void; timeZone?: string }) {
-  const { register, handleSubmit, setError, formState: { errors } } = useForm<TradeFormInput>({ resolver: zodResolver(tradeFormSchema) as unknown as Resolver<TradeFormInput>, defaultValues: defaults });
+  const formId = useId();
+  const normalizedDefaults = useMemo(
+    () =>
+      normalizeTradeFormDefaults({
+        id: defaults.id,
+        challengeId: defaults.challengeId,
+        instrument: defaults.instrument,
+        direction: defaults.direction,
+        entryTime: defaults.entryTime,
+        exitTime: defaults.exitTime,
+        entryPrice: defaults.entryPrice,
+        exitPrice: defaults.exitPrice,
+        stopLoss: defaults.stopLoss,
+        takeProfit: defaults.takeProfit,
+        positionSize: defaults.positionSize,
+        grossPnl: defaults.grossPnl,
+        costs: defaults.costs,
+        netPnl: defaults.netPnl,
+        notes: defaults.notes,
+      }),
+    [
+      defaults.id,
+      defaults.challengeId,
+      defaults.instrument,
+      defaults.direction,
+      defaults.entryTime,
+      defaults.exitTime,
+      defaults.entryPrice,
+      defaults.exitPrice,
+      defaults.stopLoss,
+      defaults.takeProfit,
+      defaults.positionSize,
+      defaults.grossPnl,
+      defaults.costs,
+      defaults.netPnl,
+      defaults.notes,
+    ],
+  );
+  const { register, handleSubmit, setError, reset, formState: { errors } } = useForm<TradeFormInput>({
+    resolver: zodResolver(tradeFormSchema) as unknown as Resolver<TradeFormInput>,
+    defaultValues: normalizedDefaults,
+    values: normalizedDefaults,
+  });
+  useEffect(() => {
+    reset(normalizedDefaults);
+  }, [normalizedDefaults, reset]);
+
   const { msg, pending, submit } = useSubmit<TradeFormInput>(saveTrade, onDone, (k, m) => setError(k as keyof TradeFormInput, { message: m }));
   const e = (k: keyof TradeFormInput) => errors[k]?.message as string | undefined;
-  const p = (k: keyof TradeFormInput) => ({ id: `t-${k}`, "aria-invalid": !!errors[k], "aria-describedby": describedBy(`t-${k}`, e(k)), ...register(k) });
+  const fid = (k: keyof TradeFormInput) => `${formId}-${k}`;
+  const p = (k: Exclude<keyof TradeFormInput, "id">, hint?: string) => ({
+    id: fid(k),
+    defaultValue: normalizedDefaults[k] ?? "",
+    "aria-invalid": !!errors[k],
+    "aria-describedby": describedBy(fid(k), e(k), hint),
+    ...register(k),
+  });
   const tzHint = timeZone ? `Timezone: ${timeZone}` : undefined;
+  const netHint = "Blank = gross − costs, or Not entered if gross is blank";
+  const handleCancel = () => {
+    reset(normalizedDefaults);
+    onDone();
+  };
   return (
-    <form onSubmit={handleSubmit(submit)} noValidate className="space-y-3">
-      <ChallengeSelect id="t-challengeId" options={options} error={e("challengeId")} register={register("challengeId")} />
+    <form onSubmit={handleSubmit((v) => submit({ ...v, ...(normalizedDefaults.id ? { id: normalizedDefaults.id } : {}) }))} noValidate className="space-y-3">
+      <input type="hidden" defaultValue={normalizedDefaults.id ?? ""} {...register("id")} />
+      <ChallengeSelect id={fid("challengeId")} options={options} defaultValue={normalizedDefaults.challengeId} error={e("challengeId")} register={register("challengeId")} />
       <div className="grid grid-cols-2 gap-3">
-        <Field id="t-instrument" label="Instrument" error={e("instrument")}><input className="input uppercase" autoComplete="off" placeholder="EURUSD" {...p("instrument")} /></Field>
-        <Field id="t-direction" label="Direction" error={e("direction")}><select className="input" {...p("direction")}><option value="long">Long</option><option value="short">Short</option></select></Field>
-        <Field id="t-entryTime" label="Entry time" error={e("entryTime")} hint={tzHint}><input type="datetime-local" className="input" {...p("entryTime")} /></Field>
-        <Field id="t-exitTime" label="Exit time" error={e("exitTime")} hint={tzHint}><input type="datetime-local" className="input" {...p("exitTime")} /></Field>
-        <Field id="t-entryPrice" label="Entry price" error={e("entryPrice")}><input className="input num" inputMode="decimal" {...p("entryPrice")} /></Field>
-        <Field id="t-exitPrice" label="Exit price" error={e("exitPrice")}><input className="input num" inputMode="decimal" {...p("exitPrice")} /></Field>
-        <Field id="t-stopLoss" label="Stop-loss" error={e("stopLoss")}><input className="input num" inputMode="decimal" {...p("stopLoss")} /></Field>
-        <Field id="t-takeProfit" label="Take-profit" error={e("takeProfit")}><input className="input num" inputMode="decimal" {...p("takeProfit")} /></Field>
-        <Field id="t-positionSize" label="Position size" error={e("positionSize")} hint="Lots or units, as your platform shows"><input className="input num" inputMode="decimal" {...p("positionSize")} /></Field>
-        <Field id="t-costs" label="Costs" error={e("costs")} hint="Commission, swap, fees"><input className="input num" inputMode="decimal" {...p("costs")} /></Field>
-        <Field id="t-grossPnl" label="Gross result" error={e("grossPnl")}><input className="input num" inputMode="decimal" {...p("grossPnl")} /></Field>
-        <Field id="t-netPnl" label="Net result" error={e("netPnl")} hint="Blank = gross − costs"><input className="input num" inputMode="decimal" {...p("netPnl")} /></Field>
+        <Field id={fid("instrument")} label="Instrument" error={e("instrument")}><input className="input uppercase" autoComplete="off" placeholder="EURUSD" {...p("instrument")} /></Field>
+        <Field id={fid("direction")} label="Direction" error={e("direction")}><select className="input" {...p("direction")}><option value="long">Long</option><option value="short">Short</option></select></Field>
+        <Field id={fid("entryTime")} label="Entry time" error={e("entryTime")} hint={tzHint}><input type="datetime-local" className="input" {...p("entryTime", tzHint)} /></Field>
+        <Field id={fid("exitTime")} label="Exit time" error={e("exitTime")} hint={tzHint}><input type="datetime-local" className="input" {...p("exitTime", tzHint)} /></Field>
+        <Field id={fid("entryPrice")} label="Entry price" error={e("entryPrice")}><input className="input num" inputMode="decimal" {...p("entryPrice")} /></Field>
+        <Field id={fid("exitPrice")} label="Exit price" error={e("exitPrice")}><input className="input num" inputMode="decimal" {...p("exitPrice")} /></Field>
+        <Field id={fid("stopLoss")} label="Stop-loss" error={e("stopLoss")}><input className="input num" inputMode="decimal" {...p("stopLoss")} /></Field>
+        <Field id={fid("takeProfit")} label="Take-profit" error={e("takeProfit")}><input className="input num" inputMode="decimal" {...p("takeProfit")} /></Field>
+        <Field id={fid("positionSize")} label="Position size" error={e("positionSize")} hint="Lots or units, as your platform shows"><input className="input num" inputMode="decimal" {...p("positionSize", "Lots or units, as your platform shows")} /></Field>
+        <Field id={fid("costs")} label="Costs" error={e("costs")} hint="Commission, swap, fees"><input className="input num" inputMode="decimal" {...p("costs", "Commission, swap, fees")} /></Field>
+        <Field id={fid("grossPnl")} label="Gross result" error={e("grossPnl")}><input className="input num" inputMode="decimal" {...p("grossPnl")} /></Field>
+        <Field id={fid("netPnl")} label="Net result (optional)" error={e("netPnl")} hint={netHint}><input className="input num" inputMode="decimal" {...p("netPnl", netHint)} /></Field>
       </div>
-      <p className="text-xs text-muted">Results are recorded manually in the account currency. Limitline does not work out profit or loss from prices.</p>
-      <Field id="t-notes" label="Notes" error={e("notes")}><textarea className="input" rows={2} {...p("notes")} /></Field>
+      <p className="text-xs text-muted">Results are recorded manually in the account currency. Leave Net result blank to use gross minus costs, or leave both blank to record the trade as Not entered (never counted as a zero result). Limitline does not work out profit or loss from prices.</p>
+      <Field id={fid("notes")} label="Notes" error={e("notes")}><textarea className="input" rows={2} {...p("notes")} /></Field>
       <FormMessage state={msg} />
-      <Actions pending={pending} onCancel={onDone} label={defaults.id ? "Save trade" : "Record trade"} />
+      <Actions pending={pending} onCancel={handleCancel} label={normalizedDefaults.id ? "Save trade" : "Record trade"} />
     </form>
   );
 }
@@ -98,7 +184,7 @@ export function EventForm({ options, defaults, onDone, timeZone }: { options: Ch
   const tzHint = timeZone ? `Interpreted in your profile timezone (${timeZone})` : undefined;
   return (
     <form onSubmit={handleSubmit((v) => submit({ ...v, currency: cur }))} noValidate className="space-y-3">
-      <ChallengeSelect id="e-challengeId" options={options} error={e("challengeId")} register={register("challengeId")} />
+      <ChallengeSelect id="e-challengeId" options={options} defaultValue={defaults.challengeId} error={e("challengeId")} register={register("challengeId")} />
       <div className="grid grid-cols-2 gap-3">
         <Field id="e-eventType" label="Type" error={e("eventType")}><select className="input" {...p("eventType")}><option value="deposit">Deposit</option><option value="withdrawal">Withdrawal</option><option value="fee">Fee</option><option value="credit">Credit</option><option value="adjustment">Other adjustment</option></select></Field>
         <Field id="e-amount" label={`Amount (${cur})`} error={e("amount")} hint="Positive. Only adjustments may be negative."><input className="input num" inputMode="decimal" {...p("amount")} /></Field>
@@ -120,7 +206,7 @@ export function SnapshotForm({ options, defaults, onDone, timeZone }: { options:
   const tzHint = timeZone ? `Interpreted in your profile timezone (${timeZone}). Change in Settings if needed.` : undefined;
   return (
     <form onSubmit={handleSubmit(submit)} noValidate className="space-y-3">
-      <ChallengeSelect id="s-challengeId" options={options} error={e("challengeId")} register={register("challengeId")} />
+      <ChallengeSelect id="s-challengeId" options={options} defaultValue={defaults.challengeId} error={e("challengeId")} register={register("challengeId")} />
       <div className="grid grid-cols-2 gap-3">
         <Field id="s-balance" label="Balance" error={e("balance")} hint="Closed-trade balance"><input className="input num" inputMode="decimal" {...p("balance")} /></Field>
         <Field id="s-equity" label="Equity" error={e("equity")} hint="Includes open positions"><input className="input num" inputMode="decimal" {...p("equity")} /></Field>
@@ -158,12 +244,20 @@ export function RecordButtons({ options, challengeId, nowLocal, timeZone, size =
   );
 }
 
-export function EditTradeButton({ options, defaults }: { options: ChallengeOption[]; defaults: TradeFormInput }) {
+export function EditTradeButton({ options, defaults, timeZone }: { options: ChallengeOption[]; defaults: TradeFormInput; timeZone?: string }) {
   const [open, setOpen] = useState(false);
   return (
     <>
       <button type="button" className="btn-secondary btn-sm" onClick={() => setOpen(true)}><Pencil size={14} aria-hidden="true" />Edit</button>
-      <Dialog open={open} onClose={() => setOpen(false)} title="Edit trade" wide><TradeForm options={options} defaults={defaults} onDone={() => setOpen(false)} /></Dialog>
+      <Dialog open={open} onClose={() => setOpen(false)} title="Edit trade" wide>
+        <TradeForm
+          key={`${defaults.id ?? "trade"}-${open ? "open" : "closed"}`}
+          options={options}
+          defaults={defaults}
+          onDone={() => setOpen(false)}
+          {...(timeZone ? { timeZone } : {})}
+        />
+      </Dialog>
     </>
   );
 }

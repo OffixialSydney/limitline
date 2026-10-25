@@ -9,7 +9,7 @@ import { addDays, wallTimeToUtc } from "@/lib/calculations/time";
 import { formatDateTime, formatMoneyString, formatNumber, toLocalInputValue } from "@/lib/formatting";
 import { EVENT_LABEL } from "@/lib/status";
 import type { BalanceEventRow, SnapshotRow, TradeRow } from "@/types/db";
-import type { TradeFormInput } from "@/lib/validation/records";
+import { tradeRowToFormInput, type TradeFormInput } from "@/lib/validation/records";
 
 export const metadata: Metadata = { title: "Records" };
 export const dynamic = "force-dynamic";
@@ -26,6 +26,11 @@ export default async function RecordsPage({ searchParams }: { searchParams: Prom
   const challenges = (ch ?? []) as { id: string; name: string; account_currency: string; status: string }[];
   const options: ChallengeOption[] = challenges.filter((c) => c.status !== "archived").map((c) => ({ id: c.id, name: c.name, currency: c.account_currency }));
   const nameOf = new Map(challenges.map((c) => [c.id, c]));
+  const optionsForTrade = (t: TradeRow): ChallengeOption[] => {
+    if (options.some((o) => o.id === t.challenge_id)) return options;
+    const own = nameOf.get(t.challenge_id);
+    return own ? [{ id: own.id, name: own.name, currency: own.account_currency }, ...options] : options;
+  };
   const nowLocal = toLocalInputValue(new Date(), prefs.timeZone);
   const isDate = (v?: string) => !!v && /^\d{4}-\d{2}-\d{2}$/.test(v);
   const fromIso = isDate(sp.from) ? wallTimeToUtc(sp.from!, "00:00", prefs.timeZone).toISOString() : null;
@@ -72,12 +77,7 @@ export default async function RecordsPage({ searchParams }: { searchParams: Prom
   const pages = Math.max(1, Math.ceil(count / PAGE_SIZE));
   const qs = (over: Partial<SP>) => { const p = new URLSearchParams(); for (const [k, v] of Object.entries({ ...sp, ...over })) if (v) p.set(k, String(v)); return `/app/trades?${p.toString()}`; };
   const money = (v: string | number | null, id: string) => formatMoneyString(v, nameOf.get(id)?.account_currency ?? profile.preferred_currency, prefs.locale);
-  const tradeDefaults = (t: TradeRow): TradeFormInput => ({
-    id: t.id, challengeId: t.challenge_id, instrument: t.instrument, direction: t.direction, entryTime: toLocalInputValue(t.entry_time, prefs.timeZone),
-    exitTime: t.exit_time ? toLocalInputValue(t.exit_time, prefs.timeZone) : "", entryPrice: t.entry_price?.toString() ?? "", exitPrice: t.exit_price?.toString() ?? "",
-    stopLoss: t.stop_loss?.toString() ?? "", takeProfit: t.take_profit?.toString() ?? "", positionSize: t.position_size?.toString() ?? "",
-    grossPnl: t.gross_pnl?.toString() ?? "", costs: t.costs?.toString() ?? "", netPnl: t.net_pnl?.toString() ?? "", notes: t.notes ?? "",
-  });
+  const tradeDefaults = (t: TradeRow): TradeFormInput => tradeRowToFormInput(t, prefs.timeZone);
   const tabs: [string, string][] = [["trades", "Trades"], ["events", "Balance events"], ["snapshots", "Observations"]];
 
   return (
@@ -121,7 +121,7 @@ export default async function RecordsPage({ searchParams }: { searchParams: Prom
                         <td className="td font-medium">{t.instrument}</td><td className="td capitalize">{t.direction}</td>
                         <td className="td num text-right">{formatNumber(t.position_size, prefs.locale, 4)}</td>
                         <td className={`td num text-right ${Number(t.net_pnl) < 0 ? "text-critical" : Number(t.net_pnl) > 0 ? "text-positive" : ""}`}>{t.net_pnl === null ? <span className="text-muted">Not entered</span> : money(t.net_pnl, t.challenge_id)}</td>
-                        <td className="td"><div className="flex justify-end gap-2"><EditTradeButton options={options} defaults={tradeDefaults(t)} /><DeleteButton kind="trade" id={t.id} /></div></td>
+                        <td className="td"><div className="flex justify-end gap-2"><EditTradeButton options={optionsForTrade(t)} defaults={tradeDefaults(t)} timeZone={prefs.timeZone} /><DeleteButton kind="trade" id={t.id} /></div></td>
                       </tr>))}
                   </tbody>
                 </table>
@@ -132,7 +132,7 @@ export default async function RecordsPage({ searchParams }: { searchParams: Prom
                     <div className="flex items-baseline justify-between gap-3"><p className="font-medium">{t.instrument} <span className="font-normal capitalize text-muted">{t.direction}</span></p>
                       <p className={`num font-medium ${Number(t.net_pnl) < 0 ? "text-critical" : Number(t.net_pnl) > 0 ? "text-positive" : ""}`}>{t.net_pnl === null ? <span className="text-sm font-normal text-muted">No result</span> : money(t.net_pnl, t.challenge_id)}</p></div>
                     <p className="text-xs text-muted">{nameOf.get(t.challenge_id)?.name ?? "Unknown"} · {formatDateTime(t.entry_time, prefs)}{t.position_size !== null ? ` · size ${formatNumber(t.position_size, prefs.locale, 4)}` : ""}</p>
-                    <div className="flex gap-2"><EditTradeButton options={options} defaults={tradeDefaults(t)} /><DeleteButton kind="trade" id={t.id} /></div>
+                    <div className="flex gap-2"><EditTradeButton options={optionsForTrade(t)} defaults={tradeDefaults(t)} timeZone={prefs.timeZone} /><DeleteButton kind="trade" id={t.id} /></div>
                   </li>))}
               </ul>
             </>

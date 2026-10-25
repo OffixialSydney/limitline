@@ -54,7 +54,7 @@ describe("money precision", () => {
 });
 
 describe("profit target progress", () => {
-  const target: import("../../src/lib/calculations/engine.ts").ProfitTargetConfig = {
+const target: import("../../src/lib/calculations/engine.ts").ProfitTargetConfig = {
   mode: "amount",
   value: "1000",
 };
@@ -584,3 +584,130 @@ describe("daily loss reset timezone and overall loss profit buffer audit", () =>
     assert.equal(ol.usedPercent, 0);
   });
 });
+
+describe("net result missing vs zero and observation freshness regressions", () => {
+  const rules = {
+    profitTarget: { mode: "amount" as const, value: "1000" },
+    dailyLoss: daily(),
+    overallLoss: overall(),
+    tradingDays: { required: 4 },
+  };
+
+  it("8. a trade with a missing net result (null) is never silently counted as a confirmed $0 result, even when a deposit exists", () => {
+    const tradeMissingNet: TradeRecord = {
+      entryTime: new Date("2026-10-22T10:00:00Z"),
+      exitTime: null,
+      netPnl: null,
+    };
+    const depositEvent: AccountEvent = {
+      occurredAt: new Date("2026-10-22T09:00:00Z"),
+      type: "deposit",
+      amount: c("500"),
+    };
+
+    // Case A: Trade with missing netPnl alone
+    const evalAlone = evaluateChallenge({
+      startingBalance: START,
+      rules,
+      observations: [],
+      trades: [tradeMissingNet],
+      events: [],
+      tradedDates: ["2026-10-22"],
+      deadline: null,
+      now: NOW,
+      todayLocal: "2026-10-22",
+    });
+    assert.equal(evalAlone.balance.cents, null);
+    assert.equal(evalAlone.profitCents, null);
+    assert.equal(evalAlone.progress.available, false);
+
+    // Case B: Trade with missing netPnl alongside a deposit (derived balance has $10,500, but trading profit must remain null, NOT 0)
+    const evalWithDeposit = evaluateChallenge({
+      startingBalance: START,
+      rules,
+      observations: [],
+      trades: [tradeMissingNet],
+      events: [depositEvent],
+      tradedDates: ["2026-10-22"],
+      deadline: null,
+      now: NOW,
+      todayLocal: "2026-10-22",
+    });
+    assert.equal(evalWithDeposit.balance.source, "derived");
+    assert.equal(evalWithDeposit.balance.cents, c("10500"));
+    assert.equal(evalWithDeposit.profitCents, null);
+    assert.equal(evalWithDeposit.progress.available, false);
+  });
+
+  it("9. an explicit net result of zero (0) produces $0.00 trading profit and 0% target progress", () => {
+    const tradeExplicitZero: TradeRecord = {
+      entryTime: new Date("2026-10-22T10:00:00Z"),
+      exitTime: new Date("2026-10-22T11:00:00Z"),
+      netPnl: 0,
+    };
+    const ev = evaluateChallenge({
+      startingBalance: START,
+      rules,
+      observations: [],
+      trades: [tradeExplicitZero],
+      events: [],
+      tradedDates: ["2026-10-22"],
+      deadline: null,
+      now: NOW,
+      todayLocal: "2026-10-22",
+    });
+    assert.equal(ev.balance.source, "derived");
+    assert.equal(ev.balance.cents, START);
+    assert.equal(ev.profitCents, 0);
+    assert.equal(ev.progress.available, true);
+    assert.equal(ev.progress.rawPercent, 0);
+    assert.equal(ev.progress.displayPercent, 0);
+  });
+
+  it("10, 11 & 12. recording a newer observation after a trade/event clears the outdated notice and restores healthy status", () => {
+    const preReset = o("2026-10-21T20:00:00Z", "10000", "10000");
+    const morningObs = o("2026-10-22T10:00:00Z", "10100", "10100");
+    const noonTrade: TradeRecord = {
+      entryTime: new Date("2026-10-22T12:00:00Z"),
+      exitTime: new Date("2026-10-22T12:30:00Z"),
+      netPnl: c("100"),
+    };
+
+    // Before newer observation: outdated notice is active and daily/overall are downgraded to data_incomplete
+    const beforeNewObs = evaluateChallenge({
+      startingBalance: START,
+      rules,
+      observations: [preReset, morningObs],
+      trades: [noonTrade],
+      events: [],
+      tradedDates: ["2026-10-22"],
+      deadline: null,
+      now: NOW,
+      todayLocal: "2026-10-22",
+    });
+    assert.equal(beforeNewObs.balance.balanceOutdated, true);
+    assert.equal(beforeNewObs.daily?.status, "data_incomplete");
+    assert.equal(beforeNewObs.overall?.status, "data_incomplete");
+
+    // After recording a newer observation at 13:00Z: outdated notice clears and daily/overall return to normal
+    const afternoonObs = o("2026-10-22T13:00:00Z", "10200", "10200");
+    const afterNewObs = evaluateChallenge({
+      startingBalance: START,
+      rules,
+      observations: [preReset, morningObs, afternoonObs],
+      trades: [noonTrade],
+      events: [],
+      tradedDates: ["2026-10-22"],
+      deadline: null,
+      now: NOW,
+      todayLocal: "2026-10-22",
+    });
+    assert.equal(afterNewObs.balance.balanceOutdated, false);
+    assert.equal(afterNewObs.balance.cents, c("10200"));
+    assert.equal(afterNewObs.profitCents, c("200"));
+    assert.equal(afterNewObs.daily?.status, "normal");
+    assert.equal(afterNewObs.overall?.status, "normal");
+  });
+});
+
+

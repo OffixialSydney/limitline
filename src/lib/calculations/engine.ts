@@ -463,7 +463,7 @@ export interface DeadlineResult { status: "none" | "ok" | "approaching" | "passe
 
 /** `deadline` and `today` are YYYY-MM-DD in the same calendar (the user's timezone). */
 export function computeDeadline(deadline: string | null, today: string, approachingDays = 7): DeadlineResult {
-  if (!deadline) return { status: "none" };
+  if (!deadline) return { status: "none", daysRemaining: null };
   const days = Math.round((Date.parse(`${deadline}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / 86400000);
   if (days < 0) return { status: "passed", daysRemaining: days };
   return { status: days <= approachingDays ? "approaching" : "ok", daysRemaining: days };

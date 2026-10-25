@@ -7,7 +7,7 @@ import { parseMoney, centsToDecimalString } from "@/lib/calculations/money";
 import { localDate } from "@/lib/calculations/time";
 import { flattenZod, uuid, type ActionResult } from "@/lib/validation/common";
 import {
-  balanceEventSchema, snapshotSchema, tradeFormSchema, tradingDaySchema,
+  balanceEventSchema, resolveTradeNetPnlCents, snapshotSchema, tradeFormSchema, tradingDaySchema,
   type BalanceEventInput, type SnapshotInput, type TradeFormInput,
 } from "@/lib/validation/records";
 
@@ -35,6 +35,9 @@ function localInputToIso(value: string, timeZone: string): string {
 async function done(s: Session, challengeId: string, message: string): Promise<ActionResult> {
   await syncAlerts(s.supabase, s.user.id, challengeId, s.profile);
   revalidatePath("/app", "layout");
+  revalidatePath("/app/trades");
+  revalidatePath("/app/overview");
+  revalidatePath(`/app/challenges/${challengeId}`);
   return { ok: true, message };
 }
 
@@ -48,9 +51,9 @@ export async function saveTrade(input: TradeFormInput): Promise<ActionResult> {
     const ch = await ownsChallenge(s, v.challengeId);
     if (!ch) return { ok: false, message: "That challenge could not be found." };
     const tz = s.profile.timezone;
-    const gross = parseMoney(v.grossPnl), costs = parseMoney(v.costs), netInput = parseMoney(v.netPnl);
+    const gross = parseMoney(v.grossPnl), costs = parseMoney(v.costs);
     // Net is whatever the user entered; otherwise gross minus costs. Limitline does not infer P&L from prices.
-    const net = netInput ?? (gross !== null ? gross - (costs ?? 0) : null);
+    const net = resolveTradeNetPnlCents(v);
     const entryIso = localInputToIso(v.entryTime, tz);
     const exitIso = v.exitTime ? localInputToIso(v.exitTime, tz) : null;
     const instrument = v.instrument.toUpperCase();
@@ -63,8 +66,15 @@ export async function saveTrade(input: TradeFormInput): Promise<ActionResult> {
     };
     let tradeId = v.id;
     if (v.id) {
-      const { error } = await s.supabase.from("trades").update(row).eq("id", v.id).eq("user_id", s.user.id);
+      const { data: updated, error } = await s.supabase
+        .from("trades")
+        .update(row)
+        .eq("id", v.id)
+        .eq("user_id", s.user.id)
+        .select("id")
+        .maybeSingle<{ id: string }>();
       if (error) return { ok: false, message: FAIL_SAVE };
+      if (!updated) return { ok: false, message: "That trade could not be found." };
     } else {
       const { data: existing } = await s.supabase
         .from("trades")

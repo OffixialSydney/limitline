@@ -152,7 +152,10 @@ export function tradingProfit(args: {
     const adj = args.events.filter((e) => e.occurredAt.getTime() <= at).reduce((s, e) => s + signedEventAmount(e), 0);
     return balance.cents - args.startingBalance - adj;
   }
-  if (balance.source === "derived") return args.trades.reduce((s, t) => s + (t.netPnl ?? 0), 0);
+  if (balance.source === "derived") {
+    if (!args.trades.some((t) => t.netPnl !== null)) return null;
+    return args.trades.reduce((s, t) => s + (t.netPnl ?? 0), 0);
+  }
   return null;
 }
 
@@ -460,7 +463,7 @@ export interface DeadlineResult { status: "none" | "ok" | "approaching" | "passe
 
 /** `deadline` and `today` are YYYY-MM-DD in the same calendar (the user's timezone). */
 export function computeDeadline(deadline: string | null, today: string, approachingDays = 7): DeadlineResult {
-  if (!deadline) return { status: "none", daysRemaining: null };
+  if (!deadline) return { status: "none" };
   const days = Math.round((Date.parse(`${deadline}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / 86400000);
   if (days < 0) return { status: "passed", daysRemaining: days };
   return { status: days <= approachingDays ? "approaching" : "ok", daysRemaining: days };

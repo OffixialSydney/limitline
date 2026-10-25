@@ -81,7 +81,13 @@ export function formatRelative(value: Date | string | null | undefined, now = ne
 export function toLocalInputValue(value: Date | string | null | undefined, timeZone: string): string {
   if (!value) return "";
   const d = typeof value === "string" ? new Date(value) : value;
-  const p = new Intl.DateTimeFormat("en-CA", { timeZone, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).formatToParts(d);
+  if (Number.isNaN(d.getTime())) return "";
+  let p: Intl.DateTimeFormatPart[];
+  try {
+    p = new Intl.DateTimeFormat("en-CA", { timeZone, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).formatToParts(d);
+  } catch {
+    p = new Intl.DateTimeFormat("en-CA", { timeZone: "UTC", hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).formatToParts(d);
+  }
   const g = (t: string) => p.find((x) => x.type === t)?.value ?? "00";
   return `${g("year")}-${g("month")}-${g("day")}T${g("hour")}:${g("minute")}`;
 }

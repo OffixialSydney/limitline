@@ -341,4 +341,3 @@ describe("trade edit form prefill, net result handling, and regression suite", (
     assert.equal(afterRead[1]!.read_at, null);
   });
 });
-

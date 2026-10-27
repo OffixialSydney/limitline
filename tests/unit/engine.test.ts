@@ -709,5 +709,3 @@ describe("net result missing vs zero and observation freshness regressions", () 
     assert.equal(afterNewObs.overall?.status, "normal");
   });
 });
-
-
